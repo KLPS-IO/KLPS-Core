@@ -1,0 +1,39 @@
+{
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/pg": "^8.20.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "pg": "^8.20.0"
+  },
+  "name": "klps-lema",
+  "version": "1.0.0",
+  "description": "AI Engine",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "echo 'Add ESLint later'",
+    "test": "echo 'Tests coming soon'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KLPS-IO/KLPS-LEMA.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/KLPS-IO/KLPS-LEMA/issues"
+  },
+  "homepage": "https://github.com/KLPS-IO/KLPS-LEMA#readme"
+}
