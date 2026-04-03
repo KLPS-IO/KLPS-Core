@@ -6,10 +6,13 @@ const app = express();
 
 app.use(express.json());
 
+// Routes
 app.use("/api", signalRouter);
-
 app.use("/api/questions", questionRouter);
 
-app.listen(5001, () => {
-  console.log("LEMA running on port 5001");
+// IMPORTANT: dynamic port for Railway
+const PORT = process.env.PORT || 5001;
+
+app.listen(PORT, () => {
+  console.log(`LEMA running on port ${PORT}`);
 });
