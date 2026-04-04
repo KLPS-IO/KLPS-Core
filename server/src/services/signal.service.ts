@@ -62,11 +62,6 @@ export const saveSignal = async ({
 
     FROM lema.questions q
 
-    LEFT JOIN lema.signals s
-      ON s.question_key = q.question_key
-      AND s.user_id = $2
-      AND s.day_number = $1
-
     LEFT JOIN lema.response_options ro
       ON ro.question_key = q.question_key
       AND ro.active = true
@@ -75,12 +70,19 @@ export const saveSignal = async ({
       q.protocol_version = 'EARLY_V1'
       AND q.day_number = $1
       AND q.active = true
-      AND s.id IS NULL
+
+      AND NOT EXISTS (
+        SELECT 1
+        FROM lema.signals s
+        WHERE
+          s.question_key = q.question_key
+          AND s.user_id = $2
+          AND s.day_number = $1
+      )
 
     GROUP BY q.id
 
-    ORDER BY q.id
-    LIMIT 1
+    ORDER BY q.id;
     `,
     [day_number, user_id]
   );
