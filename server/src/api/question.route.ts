@@ -12,6 +12,7 @@ router.get("/today", async (req, res) => {
 
     // Temporary test user
     const userId =
+      req.query.user_id as string ||
       "11111111-1111-1111-1111-111111111111";
 
     // Get correct day automatically
