@@ -1,4 +1,5 @@
 import express from "express";
+
 import { saveDailySummary } from "../services/summary.service";
 
 import {
@@ -10,8 +11,13 @@ import {
   updateStreak
 } from "../services/streak.service";
 
+import {
+  detectPatterns
+} from "../services/pattern.service";
+
 
 const router = express.Router();
+
 
 router.get("/today", async (req, res) => {
 
@@ -23,7 +29,7 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Get active session
+     * Step 1 — Get active session
      */
 
     const activeSession =
@@ -45,7 +51,7 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Generate summary
+     * Step 2 — Generate summary
      */
 
     const summary =
@@ -56,7 +62,7 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Complete session
+     * Step 3 — Complete session
      */
 
     console.log(
@@ -71,13 +77,28 @@ router.get("/today", async (req, res) => {
       day_number: dayNumber
     });
 
+
+    /**
+     * Step 4 — Update streak
+     */
+
     await updateStreak({
       user_id: userId
     });
 
 
     /**
-     * Return response
+     * Step 5 — Detect behaviour patterns
+     */
+
+    await detectPatterns({
+      user_id: userId,
+      day_number: dayNumber
+    });
+
+
+    /**
+     * Step 6 — Return summary
      */
 
     res.json({
@@ -87,7 +108,10 @@ router.get("/today", async (req, res) => {
 
   } catch (error) {
 
-    console.error(error);
+    console.error(
+      "Summary route error:",
+      error
+    );
 
     res.status(500).json({
       status: "error",
@@ -97,5 +121,6 @@ router.get("/today", async (req, res) => {
   }
 
 });
+
 
 export default router;
