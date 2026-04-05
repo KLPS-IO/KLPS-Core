@@ -1,10 +1,5 @@
 import { pool } from "../storage/postgres.client";
 
-/**
- * Detect simple behaviour patterns
- * based on today's responses
- */
-
 export const detectPatterns = async ({
   user_id,
   day_number
@@ -19,7 +14,9 @@ export const detectPatterns = async ({
 
   const signals = await pool.query(
     `
-    SELECT response_value
+    SELECT
+      question_key,
+      response_value
     FROM lema.signals
     WHERE
       user_id = $1
@@ -39,7 +36,7 @@ export const detectPatterns = async ({
   }
 
   /**
-   * Expanded keyword detection
+   * Keywords to detect
    */
 
   const keywords = [
@@ -65,7 +62,7 @@ export const detectPatterns = async ({
     "light",
     "not yet",
 
-    // behavioural keywords
+    // behavioural
     "tired",
     "stressed",
     "overwhelmed",
@@ -77,17 +74,19 @@ export const detectPatterns = async ({
   ];
 
   /**
-   * Detect unique matches
+   * Store unique matches only
    */
 
-  const detected =
-    new Set<string>();
+  const queries: Promise<any>[] = [];
 
   signals.rows.forEach(row => {
 
     const text =
       row.response_value
         .toLowerCase();
+
+    const detected =
+      new Set<string>();
 
     keywords.forEach(keyword => {
 
@@ -99,54 +98,66 @@ export const detectPatterns = async ({
 
     });
 
+    /**
+     * Insert detected patterns
+     */
+
+    detected.forEach(keyword => {
+
+      queries.push(
+
+        pool.query(
+          `
+          INSERT INTO lema.daily_patterns (
+
+            user_id,
+            pattern_type,
+            pattern_key,
+            day_number,
+            question_key
+
+          )
+
+          VALUES (
+            $1,
+            'keyword',
+            $2,
+            $3,
+            $4
+          )
+
+          ON CONFLICT (
+            user_id,
+            pattern_type,
+            pattern_key
+          )
+
+          DO UPDATE SET
+
+            frequency =
+              lema.daily_patterns.frequency + 1,
+
+            last_detected =
+              CURRENT_DATE
+          `,
+          [
+            user_id,
+            keyword,
+            day_number,
+            row.question_key
+          ]
+        )
+
+      );
+
+    });
+
   });
-
-  /**
-   * Store patterns in parallel
-   */
-
-  const queries = [];
-
-  for (const key of detected) {
-
-    queries.push(
-
-      pool.query(
-        `
-        INSERT INTO lema.daily_patterns (
-          user_id,
-          pattern_type,
-          pattern_key
-        )
-
-        VALUES ($1,'keyword',$2)
-
-        ON CONFLICT (
-          user_id,
-          pattern_type,
-          pattern_key
-        )
-
-        DO UPDATE SET
-
-          frequency =
-            lema.daily_patterns.frequency + 1,
-
-          last_detected =
-            CURRENT_DATE
-        `,
-        [user_id, key]
-      )
-
-    );
-
-  }
 
   await Promise.all(queries);
 
   console.log(
-    "Patterns detected:",
-    Array.from(detected)
+    "Pattern detection complete"
   );
 
 };
