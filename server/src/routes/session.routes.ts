@@ -11,12 +11,25 @@ router.post("/start", async (req, res) => {
 
     const { user_id } = req.body;
 
-    // Get correct day dynamically
+    if (!user_id) {
+
+      return res.status(400).json({
+        status: "error",
+        message: "user_id required"
+      });
+
+    }
+
+    /**
+     * Get correct day
+     */
 
     const dayNumber =
       await getCurrentDay(user_id);
 
-    // Start session safely
+    /**
+     * Start session
+     */
 
     const session =
       await startSessionIfNeeded({

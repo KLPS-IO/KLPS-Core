@@ -1,12 +1,24 @@
 import express from "express";
+
 import { saveSignal } from "../services/signal.service";
+
 import { pool } from "../storage/postgres.client";
+
+import {
+  startSessionIfNeeded
+} from "../services/session.service";
+
+import {
+  getCurrentDay
+} from "../services/day.service";
 
 const router = express.Router();
 
+
 const getTimeOfDay = () => {
 
-  const hour = new Date().getHours();
+  const hour =
+    new Date().getHours();
 
   if (hour < 12) return "morning";
   if (hour < 17) return "afternoon";
@@ -15,6 +27,7 @@ const getTimeOfDay = () => {
   return "night";
 
 };
+
 
 router.post("/signal", async (req, res) => {
 
@@ -26,54 +39,61 @@ router.post("/signal", async (req, res) => {
       response_value
     } = req.body;
 
-    /**
-     * Get active session day
-     */
-
-    const session = await pool.query(
-      `
-      SELECT day_number
-      FROM lema.daily_sessions
-      WHERE user_id = $1
-      AND completion_status = 'in_progress'
-      ORDER BY created_at DESC
-      LIMIT 1
-      `,
-      [user_id]
-    );
-
-    if (session.rows.length === 0) {
+    if (!user_id) {
 
       return res.status(400).json({
         status: "error",
-        message: "No active session"
+        message: "user_id missing"
       });
 
     }
 
-    const day_number =
-      session.rows[0].day_number;
+    /**
+     * Get correct day
+     */
+
+    const dayNumber =
+      await getCurrentDay(user_id);
+
+
+    /**
+     * Ensure session exists
+     */
+
+    await startSessionIfNeeded({
+
+      user_id,
+
+      protocol_version: "EARLY_V1",
+
+      day_number: dayNumber
+
+    });
+
 
     const timeOfDay =
       getTimeOfDay();
+
 
     /**
      * Save signal
      */
 
-    const result = await saveSignal({
+    const result =
+      await saveSignal({
 
-      user_id,
+        user_id,
 
-      day_number,
+        day_number: dayNumber,
 
-      question_key,
+        question_key,
 
-      response_value,
+        response_value,
 
-      domain: timeOfDay
+        domain: timeOfDay
 
-    });
+      });
+
 
     res.status(200).json({
 
@@ -83,7 +103,9 @@ router.post("/signal", async (req, res) => {
 
     });
 
-  } catch (error) {
+  }
+
+  catch (error) {
 
     console.error(
       "Signal error:",
