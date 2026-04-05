@@ -1,8 +1,8 @@
 import { pool } from "../storage/postgres.client";
 
 /**
- * Generate behavioural insight
- * based on detected patterns
+ * Generate behaviour insight
+ * based on recent + frequent patterns
  */
 
 export const generateInsight = async ({
@@ -11,16 +11,30 @@ export const generateInsight = async ({
   user_id: string;
 }) => {
 
+  /**
+   * Get strongest recent patterns
+   */
+
   const patterns = await pool.query(
     `
     SELECT
       pattern_key,
-      frequency
+      frequency,
+      last_detected
+
     FROM lema.daily_patterns
+
     WHERE
       user_id = $1
-    ORDER BY frequency DESC
-    LIMIT 3
+
+      AND last_detected >=
+        CURRENT_DATE - INTERVAL '7 days'
+
+    ORDER BY
+      frequency DESC,
+      last_detected DESC
+
+    LIMIT 5
     `,
     [user_id]
   );
@@ -40,6 +54,10 @@ export const generateInsight = async ({
 
     const freq =
       row.frequency;
+
+    /**
+     * Only meaningful repetition
+     */
 
     if (freq >= 3) {
 
