@@ -1,6 +1,9 @@
 import express from "express";
 import { pool } from "../storage/postgres.client";
 import { getCurrentDay } from "../services/day.service";
+import {
+  startSessionIfNeeded
+} from "../services/session.service";
 
 const router = express.Router();
 
@@ -16,6 +19,14 @@ router.get("/today", async (req, res) => {
     // Step 1 — Get calculated day
     const currentDay =
       await getCurrentDay(userId);
+
+    // Start session automatically
+
+      await startSessionIfNeeded({
+        user_id: userId,
+        protocol_version: "EARLY_V1",
+        day_number: currentDay
+      });
 
     // Step 2 — Get maximum available day
     const maxDayResult = await pool.query(
