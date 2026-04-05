@@ -6,6 +6,11 @@ import {
   completeSession
 } from "../services/session.service";
 
+import {
+  updateStreak
+} from "../services/streak.service";
+
+
 const router = express.Router();
 
 router.get("/today", async (req, res) => {
@@ -64,6 +69,10 @@ router.get("/today", async (req, res) => {
     await completeSession({
       user_id: userId,
       day_number: dayNumber
+    });
+
+    await updateStreak({
+      user_id: userId
     });
 
 
