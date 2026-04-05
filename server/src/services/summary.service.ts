@@ -22,19 +22,33 @@ export const saveDailySummary = async ({
   // 2 — Build simple summary (v1 logic)
   const responses = signals.rows;
 
-  let summary = "Today you showed:\n\n";
+ // Build smarter summary
 
-  if (responses.length === 0) {
-    summary += "You started your reflection journey.";
-  } else {
+let summary = "Today you showed:\n\n";
 
-    // Basic interpretation (we will upgrade this later)
-    summary += "• You reflected on your day\n";
-    summary += "• You identified what felt challenging\n";
-    summary += "• You recognised what helped you\n";
-    summary += "• You showed awareness of your behaviour\n";
+responses.forEach((r) => {
 
+  if (r.question_key.includes("progress")) {
+    summary += `• Progress: ${r.response_value}\n`;
   }
+
+  if (r.question_key.includes("reflection")) {
+    summary += `• Reflection: ${r.response_value}\n`;
+  }
+
+  if (r.question_key.includes("block")) {
+    summary += `• Challenge: ${r.response_value}\n`;
+  }
+
+  if (r.question_key.includes("support")) {
+    summary += `• Support: ${r.response_value}\n`;
+  }
+
+  if (r.question_key.includes("future")) {
+    summary += `• Next Step: ${r.response_value}\n`;
+  }
+
+});
 
   // 3 — Save summary
   await pool.query(
