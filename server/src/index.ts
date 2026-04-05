@@ -7,12 +7,17 @@ const app = express();
 
 app.use(express.json());
 
-app.use(cors({
-  origin: [
-    "http://localhost:8080",   // local dev
-    "http://localhost:5173"    // vite default
-  ]
-}));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      "https://klps-lema.vercel.app"
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    credentials: true
+  })
+);
 
 // Routes
 app.use("/api", signalRouter);
