@@ -1,7 +1,5 @@
 import express from "express";
-
 import { pool } from "../storage/postgres.client";
-
 import { getCurrentDay } from "../services/day.service";
 
 const router = express.Router();
@@ -15,11 +13,29 @@ router.get("/today", async (req, res) => {
       req.query.user_id as string ||
       "11111111-1111-1111-1111-111111111111";
 
-    // Get correct day automatically
+    // Step 1 — Get calculated day
     const currentDay =
       await getCurrentDay(userId);
 
-    // Fetch today's questions
+    // Step 2 — Get maximum available day
+    const maxDayResult = await pool.query(
+      `
+      SELECT MAX(day_number) AS max_day
+      FROM lema.questions
+      WHERE protocol_version = 'EARLY_V1'
+      `
+    );
+
+    const maxDay =
+      maxDayResult.rows[0].max_day || 1;
+
+    // Step 3 — Create safe day
+    const safeDay =
+      currentDay > maxDay
+        ? maxDay
+        : currentDay;
+
+    // Step 4 — Fetch questions using safeDay
     const result = await pool.query(
       `
       SELECT
@@ -63,12 +79,12 @@ router.get("/today", async (req, res) => {
 
       ORDER BY q.id;
       `,
-      [currentDay, userId]
+      [safeDay, userId]
     );
 
     res.json({
       status: "success",
-      day: currentDay,
+      day: safeDay,
       questions: result.rows
     });
 
