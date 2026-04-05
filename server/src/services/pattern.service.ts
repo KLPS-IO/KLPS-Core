@@ -14,7 +14,7 @@ export const detectPatterns = async ({
 }) => {
 
   /**
-   * Step 1 — Get today's signals
+   * Get today's signals
    */
 
   const signals = await pool.query(
@@ -29,16 +29,43 @@ export const detectPatterns = async ({
   );
 
   if (signals.rows.length === 0) {
+
+    console.log(
+      "No signals found for pattern detection"
+    );
+
     return;
+
   }
 
-
   /**
-   * Step 2 — Keyword library
-   * (Phase 1 detection)
+   * Expanded keyword detection
    */
 
   const keywords = [
+
+    // mood
+    "great",
+    "good",
+    "okay",
+    "struggling",
+
+    // sleep
+    "excellent",
+    "fair",
+    "poor",
+
+    // energy
+    "high",
+    "medium",
+    "low",
+
+    // exercise
+    "intense",
+    "light",
+    "not yet",
+
+    // behavioural keywords
     "tired",
     "stressed",
     "overwhelmed",
@@ -46,16 +73,15 @@ export const detectPatterns = async ({
     "productive",
     "blocked",
     "motivated"
+
   ];
 
-
   /**
-   * Step 3 — Detect unique matches
+   * Detect unique matches
    */
 
   const detected =
     new Set<string>();
-
 
   signals.rows.forEach(row => {
 
@@ -75,13 +101,11 @@ export const detectPatterns = async ({
 
   });
 
-
   /**
-   * Step 4 — Store detected patterns
-   * (Parallel inserts for performance)
+   * Store patterns in parallel
    */
 
-  const queries: Promise<any>[] = [];
+  const queries = [];
 
   for (const key of detected) {
 
@@ -118,15 +142,11 @@ export const detectPatterns = async ({
 
   }
 
+  await Promise.all(queries);
 
-  /**
-   * Step 5 — Execute all inserts
-   */
-
-  if (queries.length > 0) {
-
-    await Promise.all(queries);
-
-  }
+  console.log(
+    "Patterns detected:",
+    Array.from(detected)
+  );
 
 };
