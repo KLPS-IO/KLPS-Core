@@ -4,6 +4,7 @@ import cors from "cors";
 import signalRouter from "./api/signal.route";
 import questionRouter from "./api/question.route";
 import summaryRoutes from "./routes/summary.routes";
+import sessionRoutes from "./routes/session.routes";
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use(
 app.use("/api", signalRouter);
 app.use("/api/questions", questionRouter);
 app.use("/api/summary", summaryRoutes);
+app.use("/api/session", sessionRoutes);
 
 /**
  * Start Server
