@@ -15,6 +15,9 @@ import {
   detectPatterns
 } from "../services/pattern.service";
 
+import {
+  generateInsight
+} from "../services/insight.service";
 
 const router = express.Router();
 
@@ -96,9 +99,17 @@ router.get("/today", async (req, res) => {
       day_number: dayNumber
     });
 
+    /**
+     * Step 6 — Generate Insight
+     */
+
+    await generateInsight({
+      user_id: userId
+    });
+
 
     /**
-     * Step 6 — Return summary
+     * Step 7 — Return summary
      */
 
     res.json({

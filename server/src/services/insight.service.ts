@@ -2,7 +2,6 @@ import { pool } from "../storage/postgres.client";
 
 /**
  * Generate behaviour insight
- * based on recent + frequent patterns
  */
 
 export const generateInsight = async ({
@@ -11,37 +10,23 @@ export const generateInsight = async ({
   user_id: string;
 }) => {
 
-  /**
-   * Get strongest recent patterns
-   */
-
   const patterns = await pool.query(
     `
     SELECT
       pattern_key,
-      frequency,
-      last_detected
-
+      frequency
     FROM lema.daily_patterns
-
-    WHERE
-      user_id = $1
-
-      AND last_detected >=
-        CURRENT_DATE - INTERVAL '7 days'
-
-    ORDER BY
-      frequency DESC,
-      last_detected DESC
-
-    LIMIT 5
+    WHERE user_id = $1
+    ORDER BY frequency DESC
+    LIMIT 3
     `,
     [user_id]
   );
 
   if (patterns.rows.length === 0) {
 
-    return "You're beginning to build awareness through reflection.";
+    return
+      "You're beginning to build awareness through reflection.";
 
   }
 
@@ -56,7 +41,7 @@ export const generateInsight = async ({
       row.frequency;
 
     /**
-     * Only meaningful repetition
+     * NEW — Always generate text
      */
 
     if (freq >= 3) {
@@ -65,15 +50,15 @@ export const generateInsight = async ({
         `You've mentioned feeling ${key} several times recently.`
       );
 
+    } else {
+
+      insights.push(
+        `You've reported feeling ${key} today.`
+      );
+
     }
 
   });
-
-  if (insights.length === 0) {
-
-    return "You're continuing to explore your daily patterns.";
-
-  }
 
   return insights.join(" ");
 

@@ -86,10 +86,12 @@ export const saveDailySummary = async ({
       user_id
     });
 
+  if (insight) {
     await saveInsight({
       user_id,
       insight_text: insight
     });
+  }
 
   /**
    * Add insight to summary
