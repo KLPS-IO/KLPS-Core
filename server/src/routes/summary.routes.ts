@@ -139,17 +139,20 @@ router.get("/today", async (req, res) => {
 
   } catch (error) {
 
-    console.error(
-      "Summary route error:",
-      error
-    );
+  const errorMessage =
+    error instanceof Error ? error.message : String(error);
 
-    res.status(500).json({
-      status: "error",
-      message: "Failed to get summary"
-    });
+  console.error(
+    "Summary route error:",
+    error
+  );
 
-  }
+  res.status(500).json({
+    status: "error",
+    message: errorMessage || "Failed to get summary"
+  });
+
+}
 
 });
 
