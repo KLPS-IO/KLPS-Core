@@ -11,87 +11,126 @@ router.get("/today", async (req, res) => {
 
   try {
 
-    // Temporary test user
     const userId =
-      req.query.user_id as string ||
+      (req.query.user_id as string) ||
       "11111111-1111-1111-1111-111111111111";
 
-    // Step 1 — Get calculated day
-    const currentDay =
-      await getCurrentDay(userId);
+    /**
+     * STEP 1 — Get current day safely
+     */
 
-    // Start session automatically
+    let currentDay = 1;
 
-      await startSessionIfNeeded({
-        user_id: userId,
-        protocol_version: "EARLY_V1",
-        day_number: currentDay
-      });
+    try {
 
-    // Step 2 — Get maximum available day
-    const maxDayResult = await pool.query(
-      `
-      SELECT MAX(day_number) AS max_day
-      FROM lema.questions
-      WHERE protocol_version = 'EARLY_V1'
-      `
-    );
+      const day =
+        await getCurrentDay(userId);
+
+      if (day && day > 0) {
+
+        currentDay = day;
+
+      }
+
+    } catch (err) {
+
+      console.error(
+        "getCurrentDay failed — defaulting to Day 1"
+      );
+
+      currentDay = 1;
+
+    }
+
+    /**
+     * STEP 2 — Ensure session exists
+     */
+
+    await startSessionIfNeeded({
+      user_id: userId,
+      protocol_version: "EARLY_V1",
+      day_number: currentDay
+    });
+
+    /**
+     * STEP 3 — Find max available day
+     */
+
+    const maxDayResult =
+      await pool.query(
+        `
+        SELECT MAX(day_number) AS max_day
+        FROM lema.questions
+        WHERE protocol_version = 'EARLY_V1'
+        `
+      );
 
     const maxDay =
-      maxDayResult.rows[0].max_day || 1;
+      maxDayResult.rows[0]?.max_day || 1;
 
-    // Step 3 — Create safe day
+    /**
+     * STEP 4 — Safe day boundary
+     */
+
     const safeDay =
       currentDay > maxDay
         ? maxDay
         : currentDay;
 
-    // Step 4 — Fetch questions using safeDay
-    const result = await pool.query(
-      `
-      SELECT
-        q.question_key,
-        q.question_text,
-        q.domain,
-        q.response_type,
+    /**
+     * STEP 5 — Fetch questions
+     */
 
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'value', ro.option_value,
-              'label', ro.option_label
-            )
-            ORDER BY ro.sort_order
-          ) FILTER (WHERE ro.id IS NOT NULL),
-          '[]'
-        ) AS options
+    const result =
+      await pool.query(
+        `
+        SELECT
+          q.question_key,
+          q.question_text,
+          q.domain,
+          q.response_type,
 
-      FROM lema.questions q
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'value', ro.option_value,
+                'label', ro.option_label
+              )
+              ORDER BY ro.sort_order
+            ) FILTER (WHERE ro.id IS NOT NULL),
+            '[]'
+          ) AS options
 
-      LEFT JOIN lema.response_options ro
-        ON ro.question_key = q.question_key
-        AND ro.active = true
+        FROM lema.questions q
 
-      WHERE
-        q.protocol_version = 'EARLY_V1'
-        AND q.day_number = $1
-        AND q.active = true
+        LEFT JOIN lema.response_options ro
+          ON ro.question_key = q.question_key
+          AND ro.active = true
 
-        AND NOT EXISTS (
-          SELECT 1
-          FROM lema.signals s
-          WHERE
-            s.question_key = q.question_key
-            AND s.user_id = $2
-            AND s.day_number = $1
-        )
+        WHERE
+          q.protocol_version = 'EARLY_V1'
+          AND q.day_number = $1
+          AND q.active = true
 
-      GROUP BY q.id
+          AND NOT EXISTS (
+            SELECT 1
+            FROM lema.signals s
+            WHERE
+              s.question_key = q.question_key
+              AND s.user_id = $2
+              AND s.day_number = $1
+          )
 
-      ORDER BY q.id;
-      `,
-      [safeDay, userId]
-    );
+        GROUP BY q.id
+
+        ORDER BY q.id;
+        `,
+        [safeDay, userId]
+      );
+
+    /**
+     * STEP 6 — Return questions
+     */
 
     res.json({
       status: "success",
@@ -99,9 +138,14 @@ router.get("/today", async (req, res) => {
       questions: result.rows
     });
 
-  } catch (error) {
+  }
 
-    console.error(error);
+  catch (error) {
+
+    console.error(
+      "questions/today error:",
+      error
+    );
 
     res.status(500).json({
       status: "error",

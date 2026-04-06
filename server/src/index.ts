@@ -8,23 +8,25 @@ import sessionRoutes from "./routes/session.routes";
 
 const app = express();
 
-/**
- * Middleware
- */
-
-app.use(express.json());
 
 app.use(
   cors({
     origin: [
       "http://localhost:8080",
       "http://localhost:8081",
-      "https://klps-lema.vercel.app"
+      "https://klps-lema.vercel.app",
+      "https://klps.co.uk"
     ],
     methods: ["GET", "POST", "OPTIONS"],
     credentials: true
   })
 );
+
+/**
+ * JSON Middleware
+ */
+
+app.use(express.json());
 
 /**
  * Routes
