@@ -3,9 +3,11 @@ import express from "express";
 import { saveDailySummary } from "../services/summary.service";
 
 import {
-  getActiveSession,
   completeSession
 } from "../services/session.service";
+
+import { pool }
+from "../storage/postgres.client";
 
 import {
   updateStreak
@@ -32,25 +34,35 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Step 1 — Get active session
+     * Step 1 — Get latest session
      */
 
-    const activeSession =
-      await getActiveSession({
-        user_id: userId
-      });
+    const sessionResult =
+      await pool.query(
+        `
+        SELECT *
+        FROM lema.daily_sessions
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [userId]
+      );
 
-    if (!activeSession) {
+    if (sessionResult.rows.length === 0) {
 
       return res.status(400).json({
         status: "error",
-        message: "No active session found"
+        message: "No session found"
       });
 
     }
 
+    const latestSession =
+      sessionResult.rows[0];
+
     const dayNumber =
-      activeSession.day_number;
+      latestSession.day_number;
 
 
     /**
@@ -66,19 +78,26 @@ router.get("/today", async (req, res) => {
 
     /**
      * Step 3 — Complete session
+     * only if not already completed
      */
 
-    console.log(
-      "Completing session:",
-      userId,
-      "day:",
-      dayNumber
-    );
+    if (
+      latestSession.completion_status !== "completed"
+    ) {
 
-    await completeSession({
-      user_id: userId,
-      day_number: dayNumber
-    });
+      console.log(
+        "Completing session:",
+        userId,
+        "day:",
+        dayNumber
+      );
+
+      await completeSession({
+        user_id: userId,
+        day_number: dayNumber
+      });
+
+    }
 
 
     /**
@@ -98,6 +117,7 @@ router.get("/today", async (req, res) => {
       user_id: userId,
       day_number: dayNumber
     });
+
 
     /**
      * Step 6 — Generate Insight
