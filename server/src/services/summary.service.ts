@@ -1,5 +1,7 @@
 import { pool } from "../storage/postgres.client";
 import { generateInsight } from "./insight.service";
+import { saveInsight }
+from "./insight.persistence.service";
 
 export const saveDailySummary = async ({
   user_id,
@@ -82,6 +84,11 @@ export const saveDailySummary = async ({
   const insight =
     await generateInsight({
       user_id
+    });
+
+    await saveInsight({
+      user_id,
+      insight_text: insight
     });
 
   /**
