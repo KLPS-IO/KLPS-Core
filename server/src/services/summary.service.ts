@@ -139,7 +139,7 @@ export const saveDailySummary = async ({
     user_id,
     day_number,
     summary,
-    insight || {}
+    JSON.stringify({ insight })
   ]
 );
 
