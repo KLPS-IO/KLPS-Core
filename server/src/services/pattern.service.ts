@@ -106,49 +106,49 @@ export const detectPatterns = async ({
        */
 
       await pool.query(
-        `
-        INSERT INTO lema.daily_patterns (
+  `
+  INSERT INTO lema.daily_patterns (
 
-          user_id,
-          pattern_type,
-          pattern_key,
-          day_number,
-          question_key,
-          frequency,
-          last_detected
+    user_id,
+    pattern_type,
+    pattern_key,
+    day_number,
+    question_key,
+    frequency,
+    last_detected
 
-        )
+  )
 
-        VALUES (
-          $1,
-          'keyword',
-          $2,
-          $3,
-          $4,
-          1,
-          CURRENT_DATE
-        )
+  VALUES (
+    $1,
+    'keyword',
+    $2,
+    $3,
+    $4,
+    1,
+    CURRENT_DATE
+  )
 
-        ON CONFLICT ON CONSTRAINT unique_pattern
+  ON CONFLICT ON CONSTRAINT unique_daily_pattern
 
-        DO UPDATE SET
+  DO UPDATE SET
 
-          frequency =
-            COALESCE(
-              lema.daily_patterns.frequency,
-              0
-            ) + 1,
+    frequency =
+      COALESCE(
+        lema.daily_patterns.frequency,
+        0
+      ) + 1,
 
-          last_detected =
-            CURRENT_DATE
-        `,
-        [
-          user_id,
-          keyword,
-          day_number,
-          row.question_key
-        ]
-      );
+    last_detected =
+      CURRENT_DATE
+  `,
+  [
+    user_id,
+    keyword,
+    day_number,
+    row.question_key
+  ]
+);
 
     }
 
