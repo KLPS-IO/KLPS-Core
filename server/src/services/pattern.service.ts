@@ -107,42 +107,49 @@ export const detectPatterns = async ({
       queries.push(
 
         pool.query(
-  `
-  INSERT INTO lema.daily_patterns (
+          `
+          INSERT INTO lema.daily_patterns (
 
-    user_id,
-    pattern_type,
-    pattern_key,
-    day_number,
-    question_key
+            user_id,
+            pattern_type,
+            pattern_key,
+            day_number,
+            question_key,
+            frequency,
+            last_detected
 
-  )
+          )
 
-  VALUES (
-    $1,
-    'keyword',
-    $2,
-    $3,
-    $4
-  )
+          VALUES (
+            $1,
+            'keyword',
+            $2,
+            $3,
+            $4,
+            1,
+            CURRENT_DATE
+          )
 
-  ON CONFLICT ON CONSTRAINT unique_pattern
+          ON CONFLICT ON CONSTRAINT unique_pattern
 
-  DO UPDATE SET
+          DO UPDATE SET
 
-    frequency =
-      lema.daily_patterns.frequency + 1,
+            frequency =
+              COALESCE(
+                lema.daily_patterns.frequency,
+                0
+              ) + 1,
 
-    last_detected =
-      CURRENT_DATE
-  `,
-  [
-    user_id,
-    keyword,
-    day_number,
-    row.question_key
-  ]
-)
+            last_detected =
+              CURRENT_DATE
+          `,
+          [
+            user_id,
+            keyword,
+            day_number,
+            row.question_key
+          ]
+        )
 
       );
 
@@ -150,7 +157,9 @@ export const detectPatterns = async ({
 
   });
 
-  await Promise.all(queries);
+  for (const q of queries) {
+    await q;
+  }
 
   console.log(
     "Pattern detection complete"
