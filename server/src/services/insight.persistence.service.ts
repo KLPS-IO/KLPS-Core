@@ -32,10 +32,7 @@ export const saveInsight = async ({
       'behaviour'
     )
 
-    ON CONFLICT (
-      user_id,
-      insight_text
-    )
+    ON CONFLICT ON CONSTRAINT unique_user_insight
 
     DO UPDATE SET
 
