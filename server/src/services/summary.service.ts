@@ -109,33 +109,39 @@ export const saveDailySummary = async ({
    */
 
   await pool.query(
-    `
-    INSERT INTO lema.daily_summaries (
+  `
+  INSERT INTO lema.daily_summaries (
+    id,
+    user_id,
+    day_number,
+    created_at,
+    summary_text,
+    insight_data
+  )
 
-      user_id,
-      day_number,
-      summary_text
+  VALUES (
+    gen_random_uuid(),
+    $1,
+    $2,
+    NOW(),
+    $3,
+    $4
+  )
 
-    )
+  ON CONFLICT (user_id, day_number)
 
-    VALUES ($1,$2,$3)
-
-    ON CONFLICT (
-      user_id,
-      day_number
-    )
-
-    DO UPDATE SET
-
-      summary_text =
-        EXCLUDED.summary_text
-    `,
-    [
-      user_id,
-      day_number,
-      summary
-    ]
-  );
+  DO UPDATE SET
+    summary_text = EXCLUDED.summary_text,
+    insight_data = EXCLUDED.insight_data,
+    created_at = NOW();
+  `,
+  [
+    user_id,
+    day_number,
+    summary,
+    insight || {}
+  ]
+);
 
   return summary;
 
