@@ -41,28 +41,23 @@ export const detectPatterns = async ({
 
   const keywords = [
 
-    // mood
     "great",
     "good",
     "okay",
     "struggling",
 
-    // sleep
     "excellent",
     "fair",
     "poor",
 
-    // energy
     "high",
     "medium",
     "low",
 
-    // exercise
     "intense",
     "light",
     "not yet",
 
-    // behavioural
     "tired",
     "stressed",
     "overwhelmed",
@@ -74,91 +69,89 @@ export const detectPatterns = async ({
   ];
 
   /**
-   * Store unique matches only
+   * GLOBAL deduplication
    */
 
-  const queries: Promise<any>[] = [];
+  const insertedPatterns =
+    new Set<string>();
 
-  signals.rows.forEach(row => {
+  for (const row of signals.rows) {
 
     const text =
-      row.response_value
-        .toLowerCase();
+      row.response_value.toLowerCase();
 
-    const detected =
-      new Set<string>();
+    for (const keyword of keywords) {
 
-    keywords.forEach(keyword => {
+      if (!text.includes(keyword)) continue;
 
-      if (text.includes(keyword)) {
+      /**
+       * Build unique key
+       */
 
-        detected.add(keyword);
+      const uniqueKey =
+        `${user_id}-${keyword}-${day_number}-${row.question_key}`;
+
+      if (
+        insertedPatterns.has(uniqueKey)
+      ) {
+
+        continue;
 
       }
 
-    });
+      insertedPatterns.add(uniqueKey);
 
-    /**
-     * Insert detected patterns
-     */
+      /**
+       * Safe insert
+       */
 
-    detected.forEach(keyword => {
+      await pool.query(
+        `
+        INSERT INTO lema.daily_patterns (
 
-      queries.push(
+          user_id,
+          pattern_type,
+          pattern_key,
+          day_number,
+          question_key,
+          frequency,
+          last_detected
 
-        pool.query(
-          `
-          INSERT INTO lema.daily_patterns (
-
-            user_id,
-            pattern_type,
-            pattern_key,
-            day_number,
-            question_key,
-            frequency,
-            last_detected
-
-          )
-
-          VALUES (
-            $1,
-            'keyword',
-            $2,
-            $3,
-            $4,
-            1,
-            CURRENT_DATE
-          )
-
-          ON CONFLICT ON CONSTRAINT unique_pattern
-
-          DO UPDATE SET
-
-            frequency =
-              COALESCE(
-                lema.daily_patterns.frequency,
-                0
-              ) + 1,
-
-            last_detected =
-              CURRENT_DATE
-          `,
-          [
-            user_id,
-            keyword,
-            day_number,
-            row.question_key
-          ]
         )
 
+        VALUES (
+          $1,
+          'keyword',
+          $2,
+          $3,
+          $4,
+          1,
+          CURRENT_DATE
+        )
+
+        ON CONFLICT ON CONSTRAINT unique_pattern
+
+        DO UPDATE SET
+
+          frequency =
+            COALESCE(
+              lema.daily_patterns.frequency,
+              0
+            ) + 1,
+
+          last_detected =
+            CURRENT_DATE
+        `,
+        [
+          user_id,
+          keyword,
+          day_number,
+          row.question_key
+        ]
       );
 
-    });
+    }
 
-  });
-
-  for (const q of queries) {
-    await q;
   }
 
   console.log(
