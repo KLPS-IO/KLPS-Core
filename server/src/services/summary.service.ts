@@ -128,7 +128,7 @@ export const saveDailySummary = async ({
     $4
   )
 
-  ON CONFLICT (user_id, day_number)
+  ON CONFLICT ON CONSTRAINT daily_summaries_user_id_day_number_key
 
   DO UPDATE SET
     summary_text = EXCLUDED.summary_text,
