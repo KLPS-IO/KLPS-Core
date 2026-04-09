@@ -3,6 +3,8 @@ import { pool } from "../storage/postgres.client";
 import { getSafeCurrentDay } from "../services/day.service";
 import { startSessionIfNeeded }
 from "../services/session.service";
+import { ensureUserProfile }
+from "../services/user-profile.service";
 
 const router = express.Router();
 
@@ -34,6 +36,15 @@ router.get("/today", async (req, res) => {
      * STEP 1 — Get day
      */
 
+    await ensureUserProfile({
+      userId,
+      cohortVersion: "EARLY_V1"
+    });
+
+    /**
+     * STEP 2 — Get day
+     */
+
     const safeDay =
       await getSafeCurrentDay({
         userId,
@@ -41,7 +52,7 @@ router.get("/today", async (req, res) => {
       });
 
     /**
-     * STEP 2 — Start session
+     * STEP 3 — Start session
      */
 
     await startSessionIfNeeded({
@@ -55,7 +66,7 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 3 — Get latest cycle state
+     * STEP 4 — Get latest cycle state
      */
 
     const cycleCheck = await pool.query(
@@ -95,7 +106,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 4 — Fetch questions
+     * STEP 5 — Fetch questions
      */
 
     const result = await pool.query(
