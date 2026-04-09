@@ -9,7 +9,7 @@ import {
 } from "../services/session.service";
 
 import {
-  getCurrentDay
+  getSafeCurrentDay
 } from "../services/day.service";
 
 const router = express.Router();
@@ -48,12 +48,25 @@ router.post("/signal", async (req, res) => {
 
     }
 
+    if (!question_key || response_value === undefined) {
+
+      return res.status(400).json({
+        status: "error",
+        message:
+          "question_key and response_value are required"
+      });
+
+    }
+
     /**
      * Get correct day
      */
 
     const dayNumber =
-      await getCurrentDay(user_id);
+      await getSafeCurrentDay({
+        userId: user_id,
+        protocolVersion: "EARLY_V1"
+      });
 
 
     /**

@@ -1,6 +1,6 @@
 import express from "express";
 import { pool } from "../storage/postgres.client";
-import { getCurrentDay } from "../services/day.service";
+import { getSafeCurrentDay } from "../services/day.service";
 import { startSessionIfNeeded }
 from "../services/session.service";
 
@@ -34,8 +34,11 @@ router.get("/today", async (req, res) => {
      * STEP 1 — Get day
      */
 
-    const currentDay =
-      await getCurrentDay(userId);
+    const safeDay =
+      await getSafeCurrentDay({
+        userId,
+        protocolVersion: "EARLY_V1"
+      });
 
     /**
      * STEP 2 — Start session
@@ -47,32 +50,12 @@ router.get("/today", async (req, res) => {
 
       protocol_version: "EARLY_V1",
 
-      day_number: currentDay
+      day_number: safeDay
 
     });
 
     /**
-     * STEP 3 — Max day safety
-     */
-
-    const maxDayResult = await pool.query(
-      `
-      SELECT MAX(day_number) AS max_day
-      FROM lema.questions
-      WHERE protocol_version = 'EARLY_V1'
-      `
-    );
-
-    const maxDay =
-      maxDayResult.rows[0].max_day || 1;
-
-    const safeDay =
-      currentDay > maxDay
-        ? maxDay
-        : currentDay;
-
-    /**
-     * STEP 4 — Get latest cycle state
+     * STEP 3 — Get latest cycle state
      */
 
     const cycleCheck = await pool.query(
@@ -112,7 +95,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 5 — Fetch questions
+     * STEP 4 — Fetch questions
      */
 
     const result = await pool.query(

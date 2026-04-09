@@ -29,8 +29,16 @@ router.get("/today", async (req, res) => {
   try {
 
     const userId =
-      (req.query.user_id as string) ||
-      "11111111-1111-1111-1111-111111111111";
+      req.query.user_id as string;
+
+    if (!userId) {
+
+      return res.status(400).json({
+        status: "error",
+        message: "user_id is required"
+      });
+
+    }
 
 
     /**

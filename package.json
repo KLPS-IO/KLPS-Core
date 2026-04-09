@@ -22,7 +22,7 @@
     "build": "tsc",
     "start": "node server/dist/index.js",
     "lint": "echo 'Add ESLint later'",
-    "test": "echo 'Tests coming soon'"
+    "test": "node --test -r ts-node/register server/src/services/day.service.test.ts"
   },
   "repository": {
     "type": "git",

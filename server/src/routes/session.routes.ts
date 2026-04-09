@@ -1,7 +1,7 @@
 import express from "express";
 
 import { startSessionIfNeeded } from "../services/session.service";
-import { getCurrentDay } from "../services/day.service";
+import { getSafeCurrentDay } from "../services/day.service";
 
 const router = express.Router();
 
@@ -25,7 +25,10 @@ router.post("/start", async (req, res) => {
      */
 
     const dayNumber =
-      await getCurrentDay(user_id);
+      await getSafeCurrentDay({
+        userId: user_id,
+        protocolVersion: "EARLY_V1"
+      });
 
     /**
      * Start session
