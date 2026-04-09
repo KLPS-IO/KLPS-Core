@@ -42,7 +42,40 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 2 — Get day
+     * STEP 2 — Block repeat check-ins for the current calendar day.
+     * A completed check-in is defined as any signal created today.
+     */
+
+    const completedTodayCheck = await pool.query(
+      `
+      SELECT COUNT(*) AS count
+      FROM lema.signals
+      WHERE user_id = $1
+      AND DATE(created_at) = CURRENT_DATE;
+      `,
+      [userId]
+    );
+
+    const completedToday =
+      Number(completedTodayCheck.rows[0].count) > 0;
+
+    if (completedToday) {
+
+      console.log(
+        "User already completed today:",
+        userId
+      );
+
+      return res.json({
+        day: null,
+        questions: [],
+        completedToday: true
+      });
+
+    }
+
+    /**
+     * STEP 3 — Get day
      */
 
     const safeDay =
@@ -52,7 +85,7 @@ router.get("/today", async (req, res) => {
       });
 
     /**
-     * STEP 3 — Start session
+     * STEP 4 — Start session
      */
 
     await startSessionIfNeeded({
@@ -66,7 +99,7 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 4 — Get latest cycle state
+     * STEP 5 — Get latest cycle state
      */
 
     const cycleCheck = await pool.query(
@@ -106,7 +139,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 5 — Fetch questions
+     * STEP 6 — Fetch questions
      */
 
     const result = await pool.query(
