@@ -7,6 +7,8 @@ import { ensureUserProfile }
 from "../services/user-profile.service";
 
 const router = express.Router();
+const APP_TIMEZONE =
+  "Europe/London";
 
 router.get("/today", async (req, res) => {
 
@@ -51,9 +53,10 @@ router.get("/today", async (req, res) => {
       SELECT COUNT(*) AS count
       FROM lema.signals
       WHERE user_id = $1
-      AND DATE(created_at) = CURRENT_DATE;
+      AND DATE(created_at AT TIME ZONE $2)
+        = DATE(NOW() AT TIME ZONE $2);
       `,
-      [userId]
+      [userId, APP_TIMEZONE]
     );
 
     const completedToday =
