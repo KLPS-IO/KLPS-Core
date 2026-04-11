@@ -1,7 +1,5 @@
 import express from "express";
 
-import { saveDailySummary } from "../services/summary.service";
-
 import {
   completeSession
 } from "../services/session.service";
@@ -59,9 +57,10 @@ router.get("/today", async (req, res) => {
 
     if (sessionResult.rows.length === 0) {
 
-      return res.status(400).json({
-        status: "error",
-        message: "No session found"
+      return res.json({
+        status: "success",
+        summary_text: "",
+        completedToday: false
       });
 
     }
@@ -74,14 +73,30 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Step 2 — Generate summary
+     * Step 2 — Fetch existing summary
+     * (SAFE — never generates)
      */
 
-    const summary =
-      await saveDailySummary({
-        user_id: userId,
-        day_number: dayNumber
-      });
+    const summaryResult =
+      await pool.query(
+        `
+        SELECT summary_text
+        FROM lema.daily_summaries
+        WHERE user_id = $1
+        AND day_number = $2
+        LIMIT 1
+        `,
+        [userId, dayNumber]
+      );
+
+    let summary = "";
+
+    if (summaryResult.rows.length > 0) {
+
+      summary =
+        summaryResult.rows[0].summary_text;
+
+    }
 
 
     /**
@@ -137,32 +152,37 @@ router.get("/today", async (req, res) => {
 
 
     /**
-     * Step 7 — Return summary
+     * Step 7 — Return summary safely
      */
 
     res.json({
       status: "success",
-      summary
+      summary_text: summary,
+      completedToday:
+        latestSession.completion_status === "completed"
     });
 
   } catch (error) {
 
-  const errorMessage =
-    error instanceof Error ? error.message : String(error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : String(error);
 
-  console.error(
-    "Summary route error:",
-    error
-  );
+    console.error(
+      "Summary route error:",
+      error
+    );
 
-  res.status(500).json({
-    status: "error",
-    message: errorMessage || "Failed to get summary"
-  });
+    res.status(500).json({
+      status: "error",
+      message:
+        errorMessage ||
+        "Failed to get summary"
+    });
 
-}
+  }
 
 });
-
 
 export default router;
