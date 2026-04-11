@@ -5,6 +5,7 @@ import signalRouter from "./api/signal.route";
 import questionRouter from "./api/question.route";
 import summaryRoutes from "./routes/summary.routes";
 import sessionRoutes from "./routes/session.routes";
+import founderRoutes from "./routes/founder";
 
 const app = express();
 
@@ -97,6 +98,7 @@ app.use("/api", signalRouter);
 app.use("/api/questions", questionRouter);
 app.use("/api/summary", summaryRoutes);
 app.use("/api/session", sessionRoutes);
+app.use("/api/founder", founderRoutes);
 
 /**
  * Health Check
