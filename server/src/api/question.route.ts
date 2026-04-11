@@ -1,12 +1,17 @@
 import express from "express";
 import { pool } from "../storage/postgres.client";
-import { getSafeCurrentDay } from "../services/day.service";
+
+import { getSafeCurrentDay }
+from "../services/day.service";
+
 import { startSessionIfNeeded }
 from "../services/session.service";
+
 import { ensureUserProfile }
 from "../services/user-profile.service";
 
 const router = express.Router();
+
 const APP_TIMEZONE =
   "Europe/London";
 
@@ -15,7 +20,7 @@ router.get("/today", async (req, res) => {
   try {
 
     /**
-     * PHASE 2 — Require user_id
+     * Require user_id
      */
 
     const userId =
@@ -35,95 +40,96 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 1 — Get day
+     * STEP 1 — Ensure profile exists
      */
 
     await ensureUserProfile({
+
       userId,
-      cohortVersion: "EARLY_V1"
+
+      cohortVersion:
+        "EARLY_V1"
+
     });
 
     /**
-     * STEP 2 — Block repeat check-ins for the current calendar day.
-     * A completed check-in is defined as any signal created today.
+     * STEP 2 — TEMPORARY:
+     * Disable completed-today lock
      */
 
-    const completedTodayCheck = await pool.query(
-      `
-      SELECT COUNT(*) AS count
-      FROM lema.signals
-      WHERE user_id = $1
-      AND DATE(created_at AT TIME ZONE $2)
-        = DATE(NOW() AT TIME ZONE $2);
-      `,
-      [userId, APP_TIMEZONE]
-    );
-
     const completedToday =
-      Number(completedTodayCheck.rows[0].count) > 0;
+      false;
 
-    if (completedToday) {
-
-      console.log(
-        "User already completed today:",
-        userId
-      );
+    if (false && completedToday) {
 
       return res.json({
+
         day: null,
+
         questions: [],
+
         completedToday: true
+
       });
 
     }
 
     /**
-     * STEP 3 — Get day
+     * STEP 3 — Get safe day
      */
 
     const safeDay =
       await getSafeCurrentDay({
+
         userId,
-        protocolVersion: "EARLY_V1"
+
+        protocolVersion:
+          "EARLY_V1"
+
       });
 
     /**
-     * STEP 4 — Start session
+     * STEP 4 — Ensure session exists
      */
 
     await startSessionIfNeeded({
 
-      user_id: userId,
+      user_id:
+        userId,
 
-      protocol_version: "EARLY_V1",
+      protocol_version:
+        "EARLY_V1",
 
-      day_number: safeDay
+      day_number:
+        safeDay
 
     });
 
     /**
-     * STEP 5 — Get latest cycle state
+     * STEP 5 — Detect cycle skip state
      */
 
-    const cycleCheck = await pool.query(
-      `
-      SELECT response_value
-      FROM lema.signals
-      WHERE
-        user_id = $1
-        AND question_key = 'cycle_stage'
-      ORDER BY day_number DESC
-      LIMIT 1
-      `,
-      [userId]
-    );
+    const cycleCheck =
+      await pool.query(
+        `
+        SELECT response_value
+        FROM lema.signals
+        WHERE
+          user_id = $1
+          AND question_key = 'cycle_stage'
+        ORDER BY day_number DESC
+        LIMIT 1
+        `,
+        [userId]
+      );
 
     let skipCycle = false;
 
     if (cycleCheck.rows.length > 0) {
 
       const latest =
-        cycleCheck.rows[0].response_value;
+        cycleCheck.rows[0]
+          .response_value;
 
       if (
 
@@ -143,81 +149,95 @@ router.get("/today", async (req, res) => {
 
     /**
      * STEP 6 — Fetch questions
+     * RECOVERY MODE:
+     * No signal filtering
      */
 
-    const result = await pool.query(
-      `
-      SELECT
-        q.question_key,
-        q.question_text,
-        q.domain,
-        q.response_type,
+    const result =
+      await pool.query(
+        `
+        SELECT
+          q.question_key,
+          q.question_text,
+          q.domain,
+          q.response_type,
 
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'value', ro.option_value,
-              'label', ro.option_label
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'value',
+                ro.option_value,
+
+                'label',
+                ro.option_label
+              )
+              ORDER BY ro.sort_order
             )
-            ORDER BY ro.sort_order
+            FILTER (
+              WHERE ro.id
+              IS NOT NULL
+            ),
+            '[]'
+          ) AS options
+
+        FROM lema.questions q
+
+        LEFT JOIN
+          lema.response_options ro
+        ON
+          ro.question_key =
+            q.question_key
+          AND ro.active = true
+
+        WHERE
+
+          q.protocol_version =
+            'EARLY_V1'
+
+          AND q.day_number =
+            $1
+
+          AND q.active = true
+
+          AND (
+
+            $1 = 1
+
+            OR q.question_key
+               != 'cycle_stage'
+
+            OR $2 = false
+
           )
-          FILTER (WHERE ro.id IS NOT NULL),
-          '[]'
-        ) AS options
 
-      FROM lema.questions q
+        GROUP BY
+          q.id
 
-      LEFT JOIN lema.response_options ro
-        ON ro.question_key = q.question_key
-        AND ro.active = true
+        ORDER BY
+          q.sort_order;
+        `,
+        [
+          safeDay,
+          skipCycle
+        ]
+      );
 
-      WHERE
-
-        q.protocol_version = 'EARLY_V1'
-
-        AND q.day_number = $1
-
-        AND q.active = true
-
-        AND NOT EXISTS (
-
-          SELECT 1
-          FROM lema.signals s
-          WHERE
-            s.question_key = q.question_key
-            AND s.user_id = $2
-            AND s.day_number = $1
-
-        )
-
-        AND (
-
-          $1 = 1
-
-          OR q.question_key != 'cycle_stage'
-
-          OR $3 = false
-
-        )
-
-      GROUP BY q.id
-
-      ORDER BY q.sort_order;
-      `,
-      [
-        safeDay,
-        userId,
-        skipCycle
-      ]
-    );
+    /**
+     * STEP 7 — Return result
+     */
 
     res.json({
 
       status: "success",
 
-      day: safeDay,
+      day:
+        safeDay,
 
-      questions: result.rows
+      questions:
+        result.rows,
+
+      completedToday:
+        false
 
     });
 
@@ -225,7 +245,10 @@ router.get("/today", async (req, res) => {
 
   catch (error) {
 
-    console.error(error);
+    console.error(
+      "Question route error:",
+      error
+    );
 
     res.status(500).json({
 
