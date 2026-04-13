@@ -53,7 +53,29 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 2 — REAL completed-today check
+     * STEP 2 — Get last completed day
+     * (Needed for streak display)
+     */
+
+    const lastCompletedResult =
+      await pool.query(
+        `
+        SELECT MAX(day_number) AS last_day
+        FROM lema.daily_sessions
+        WHERE
+          user_id = $1
+          AND completion_status = 'completed'
+        `,
+        [userId]
+      );
+
+    const lastCompletedDay =
+      Number(
+        lastCompletedResult.rows[0]?.last_day ?? 1
+      );
+
+    /**
+     * STEP 3 — REAL completed-today check
      */
 
     const completedTodayCheck =
@@ -80,22 +102,31 @@ router.get("/today", async (req, res) => {
     const completedToday =
       completedTodayCheck.rows.length > 0;
 
+    /**
+     * If completed today,
+     * return NO questions but DO return streak day
+     */
+
     if (completedToday) {
 
       return res.json({
+
+        status: "success",
 
         day: null,
 
         questions: [],
 
-        completedToday: true
+        completedToday: true,
+
+        lastCompletedDay: lastCompletedDay
 
       });
 
     }
 
     /**
-     * STEP 3 — Get safe day
+     * STEP 4 — Get safe day
      */
 
     const safeDay =
@@ -109,7 +140,7 @@ router.get("/today", async (req, res) => {
       });
 
     /**
-     * STEP 4 — Ensure session exists
+     * STEP 5 — Ensure session exists
      */
 
     await startSessionIfNeeded({
@@ -126,7 +157,7 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 5 — Detect cycle skip state
+     * STEP 6 — Detect cycle skip state
      */
 
     const cycleCheck =
@@ -168,7 +199,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 6 — Fetch questions
+     * STEP 7 — Fetch questions
      */
 
     const result =
@@ -241,20 +272,22 @@ router.get("/today", async (req, res) => {
       );
 
     /**
-     * STEP 7 — Return result
+     * STEP 8 — Return result
      */
 
     res.json({
 
-  status: "success",
+      status: "success",
 
-  day: safeDay,
+      day: safeDay,
 
-  questions: result.rows,
+      questions: result.rows,
 
-  completedToday: completedToday
+      completedToday: false,
 
-});
+      lastCompletedDay: lastCompletedDay
+
+    });
 
   }
 
