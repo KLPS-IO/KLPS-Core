@@ -60,7 +60,7 @@ router.get("/today", async (req, res) => {
     const completedToday =
       false;
 
-    if (false && completedToday) {
+    if (completedToday) { {
 
       return res.json({
 
