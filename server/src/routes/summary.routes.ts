@@ -266,9 +266,24 @@ router.get("/today", async (req, res) => {
      * STEP 7 — Generate insight
      */
 
-    await generateInsight({
-      user_id: userId
+    /**
+ * STEP 7 — Generate insight (SAFE MODE)
+ */
+
+try {
+
+  await generateInsight({
+    user_id: userId
     });
+
+  } catch (error) {
+
+    console.error(
+      "Insight generation failed:",
+      error
+    );
+
+  }
 
     /**
      * STEP 8 — Return summary
