@@ -70,7 +70,7 @@ router.get("/today", async (req, res) => {
       latestSession.day_number;
 
     /**
-     * STEP 2 — Fetch existing summary
+     * STEP 2 — Check existing summary
      */
 
     const summaryResult =
@@ -101,13 +101,6 @@ router.get("/today", async (req, res) => {
     if (
       latestSession.completion_status !== "completed"
     ) {
-
-      console.log(
-        "Completing session:",
-        userId,
-        "day:",
-        dayNumber
-      );
 
       await completeSession({
         user_id: userId,
@@ -144,35 +137,30 @@ router.get("/today", async (req, res) => {
       const responses =
         signalsResult.rows;
 
-      /**
-       * Basic smart reflection logic
-       */
-
       const reflectionParts: string[] = [];
 
-      const reflection =
+      const firstAnswer =
         responses.find(r =>
           r.question_key.includes("q1")
         );
 
-      if (reflection) {
+      if (firstAnswer) {
 
         reflectionParts.push(
-          `You shared that "${reflection.response_value}".`
+          `You shared that "${firstAnswer.response_value}".`
         );
 
       }
 
-      const emotion =
+      const emotionAnswer =
         responses.find(r =>
-          r.question_key.includes("emotion") ||
           r.question_key.includes("q2")
         );
 
-      if (emotion) {
+      if (emotionAnswer) {
 
         reflectionParts.push(
-          `You noticed feeling ${emotion.response_value}.`
+          `You noticed feeling ${emotionAnswer.response_value}.`
         );
 
       }
@@ -189,7 +177,7 @@ router.get("/today", async (req, res) => {
         reflectionParts.join(" ");
 
       /**
-       * Save summary
+       * Save summary safely
        */
 
       await pool.query(
@@ -200,7 +188,6 @@ router.get("/today", async (req, res) => {
           summary_text
         )
         VALUES ($1, $2, $3)
-        ON CONFLICT DO NOTHING
         `,
         [
           userId,
@@ -246,19 +233,13 @@ router.get("/today", async (req, res) => {
 
       summary_text: summary,
 
-      completedToday:
-        latestSession.completion_status === "completed"
+      completedToday: true
 
     });
 
   }
 
   catch (error) {
-
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : String(error);
 
     console.error(
       "Summary route error:",
@@ -270,7 +251,6 @@ router.get("/today", async (req, res) => {
       status: "error",
 
       message:
-        errorMessage ||
         "Failed to get summary"
 
     });
