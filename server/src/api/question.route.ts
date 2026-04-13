@@ -246,18 +246,15 @@ router.get("/today", async (req, res) => {
 
     res.json({
 
-      status: "success",
+  status: "success",
 
-      day:
-        safeDay,
+  day: safeDay,
 
-      questions:
-        result.rows,
+  questions: result.rows,
 
-      completedToday:
-        false
+  completedToday: completedToday
 
-    });
+});
 
   }
 
