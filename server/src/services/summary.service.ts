@@ -1,5 +1,8 @@
 import { pool } from "../storage/postgres.client";
-import { generateInsight } from "./insight.service";
+
+import { generateInsight }
+from "./insight.service";
+
 import { saveInsight }
 from "./insight.persistence.service";
 
@@ -40,35 +43,50 @@ export const saveDailySummary = async ({
 
   responses.forEach((r) => {
 
-    if (r.question_key.includes("progress")) {
+    if (
+      r.question_key &&
+      r.question_key.includes("progress")
+    ) {
 
       summary +=
         `• Progress: ${r.response_value}\n`;
 
     }
 
-    if (r.question_key.includes("reflection")) {
+    if (
+      r.question_key &&
+      r.question_key.includes("reflection")
+    ) {
 
       summary +=
         `• Reflection: ${r.response_value}\n`;
 
     }
 
-    if (r.question_key.includes("block")) {
+    if (
+      r.question_key &&
+      r.question_key.includes("block")
+    ) {
 
       summary +=
         `• Challenge: ${r.response_value}\n`;
 
     }
 
-    if (r.question_key.includes("support")) {
+    if (
+      r.question_key &&
+      r.question_key.includes("support")
+    ) {
 
       summary +=
         `• Support: ${r.response_value}\n`;
 
     }
 
-    if (r.question_key.includes("future")) {
+    if (
+      r.question_key &&
+      r.question_key.includes("future")
+    ) {
 
       summary +=
         `• Next Step: ${r.response_value}\n`;
@@ -79,28 +97,24 @@ export const saveDailySummary = async ({
 
   /**
    * 3 — Generate behaviour insight
+   *
+   * IMPORTANT:
+   * generateInsight() returns void
+   * so we DO NOT store it in a variable
    */
 
-  const insight =
+  try {
+
     await generateInsight({
       user_id
     });
 
-  if (insight) {
-    await saveInsight({
-      user_id,
-      insight_text: insight
-    });
-  }
+  } catch (error) {
 
-  /**
-   * Add insight to summary
-   */
-
-  if (insight) {
-
-    summary +=
-      `\n${insight}`;
+    console.error(
+      "Insight generation failed:",
+      error
+    );
 
   }
 
@@ -109,39 +123,39 @@ export const saveDailySummary = async ({
    */
 
   await pool.query(
-  `
-  INSERT INTO lema.daily_summaries (
-    id,
-    user_id,
-    day_number,
-    created_at,
-    summary_text,
-    insight_data
-  )
+    `
+    INSERT INTO lema.daily_summaries (
+      id,
+      user_id,
+      day_number,
+      created_at,
+      summary_text,
+      insight_data
+    )
 
-  VALUES (
-    gen_random_uuid(),
-    $1,
-    $2,
-    NOW(),
-    $3,
-    $4
-  )
+    VALUES (
+      gen_random_uuid(),
+      $1,
+      $2,
+      NOW(),
+      $3,
+      $4
+    )
 
-  ON CONFLICT ON CONSTRAINT daily_summaries_user_id_day_number_key
+    ON CONFLICT ON CONSTRAINT daily_summaries_user_id_day_number_key
 
-  DO UPDATE SET
-    summary_text = EXCLUDED.summary_text,
-    insight_data = EXCLUDED.insight_data,
-    created_at = NOW();
-  `,
-  [
-    user_id,
-    day_number,
-    summary,
-    JSON.stringify({ insight })
-  ]
-);
+    DO UPDATE SET
+      summary_text = EXCLUDED.summary_text,
+      insight_data = EXCLUDED.insight_data,
+      created_at = NOW();
+    `,
+    [
+      user_id,
+      day_number,
+      summary,
+      JSON.stringify({})
+    ]
+  );
 
   return summary;
 
