@@ -66,7 +66,7 @@ router.get("/today", async (req, res) => {
     const latestSession =
       sessionResult.rows[0];
 
-    const dayNumber =
+    const dayNumber: number =
       latestSession.day_number;
 
     /**
@@ -85,7 +85,7 @@ router.get("/today", async (req, res) => {
         [userId, dayNumber]
       );
 
-    let summary = "";
+    let summary: string = "";
 
     if (summaryResult.rows.length > 0) {
 
@@ -135,11 +135,10 @@ router.get("/today", async (req, res) => {
         );
 
       const responses =
-        signalsResult.rows;
-
-      /**
-       * SMART REFLECTION ENGINE
-       */
+        signalsResult.rows.filter(
+          r =>
+            typeof r.response_value === "string"
+        );
 
       const reflectionParts: string[] = [];
 
@@ -181,7 +180,7 @@ router.get("/today", async (req, res) => {
       }
 
       /**
-       * Add encouragement logic
+       * Add encouragement
        */
 
       if (reflectionParts.length > 0) {
@@ -193,7 +192,7 @@ router.get("/today", async (req, res) => {
       }
 
       /**
-       * Fallback safety
+       * Fallback
        */
 
       if (reflectionParts.length === 0) {
@@ -208,7 +207,7 @@ router.get("/today", async (req, res) => {
         reflectionParts.join(" ");
 
       /**
-       * Prevent duplicate inserts
+       * Prevent duplicate summaries
        */
 
       await pool.query(
@@ -263,33 +262,29 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 7 — Generate insight
+     * STEP 7 — Generate insight (SAFE MODE)
      */
 
-    /**
- * STEP 7 — Generate insight (SAFE MODE)
- */
+    try {
 
-try {
+      await generateInsight({
+        user_id: userId
+      });
 
-  await generateInsight({
-    user_id: userId
-    });
+    } catch (error) {
 
-  } catch (error) {
+      console.error(
+        "Insight generation failed:",
+        error
+      );
 
-    console.error(
-      "Insight generation failed:",
-      error
-    );
-
-  }
+    }
 
     /**
      * STEP 8 — Return summary
      */
 
-    res.json({
+    return res.json({
 
       status: "success",
 
@@ -303,17 +298,21 @@ try {
 
   catch (error) {
 
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
     console.error(
       "Summary route error:",
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
 
       status: "error",
 
-      message:
-        "Failed to get summary"
+      message: errorMessage
 
     });
 
