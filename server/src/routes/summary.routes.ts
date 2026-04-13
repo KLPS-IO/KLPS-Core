@@ -21,7 +21,6 @@ import {
 
 const router = express.Router();
 
-
 router.get("/today", async (req, res) => {
 
   try {
@@ -38,9 +37,8 @@ router.get("/today", async (req, res) => {
 
     }
 
-
     /**
-     * Step 1 — Get latest session
+     * STEP 1 — Get latest session
      */
 
     const sessionResult =
@@ -71,10 +69,8 @@ router.get("/today", async (req, res) => {
     const dayNumber =
       latestSession.day_number;
 
-
     /**
-     * Step 2 — Fetch existing summary
-     * (SAFE — never generates)
+     * STEP 2 — Fetch existing summary
      */
 
     const summaryResult =
@@ -98,10 +94,8 @@ router.get("/today", async (req, res) => {
 
     }
 
-
     /**
-     * Step 3 — Complete session
-     * only if not already completed
+     * STEP 3 — Complete session
      */
 
     if (
@@ -122,18 +116,111 @@ router.get("/today", async (req, res) => {
 
     }
 
+    /**
+     * STEP 4 — Generate summary if missing
+     */
+
+    if (!summary) {
+
+      console.log(
+        "Generating reflection summary..."
+      );
+
+      const signalsResult =
+        await pool.query(
+          `
+          SELECT
+            question_key,
+            response_value
+          FROM lema.signals
+          WHERE
+            user_id = $1
+            AND day_number = $2
+          ORDER BY created_at ASC
+          `,
+          [userId, dayNumber]
+        );
+
+      const responses =
+        signalsResult.rows;
+
+      /**
+       * Basic smart reflection logic
+       */
+
+      const reflectionParts: string[] = [];
+
+      const reflection =
+        responses.find(r =>
+          r.question_key.includes("q1")
+        );
+
+      if (reflection) {
+
+        reflectionParts.push(
+          `You shared that "${reflection.response_value}".`
+        );
+
+      }
+
+      const emotion =
+        responses.find(r =>
+          r.question_key.includes("emotion") ||
+          r.question_key.includes("q2")
+        );
+
+      if (emotion) {
+
+        reflectionParts.push(
+          `You noticed feeling ${emotion.response_value}.`
+        );
+
+      }
+
+      if (reflectionParts.length === 0) {
+
+        reflectionParts.push(
+          "You showed up and reflected today — that matters."
+        );
+
+      }
+
+      summary =
+        reflectionParts.join(" ");
+
+      /**
+       * Save summary
+       */
+
+      await pool.query(
+        `
+        INSERT INTO lema.daily_summaries (
+          user_id,
+          day_number,
+          summary_text
+        )
+        VALUES ($1, $2, $3)
+        ON CONFLICT DO NOTHING
+        `,
+        [
+          userId,
+          dayNumber,
+          summary
+        ]
+      );
+
+    }
 
     /**
-     * Step 4 — Update streak
+     * STEP 5 — Update streak
      */
 
     await updateStreak({
       user_id: userId
     });
 
-
     /**
-     * Step 5 — Detect behaviour patterns
+     * STEP 6 — Detect patterns
      */
 
     await detectPatterns({
@@ -141,28 +228,32 @@ router.get("/today", async (req, res) => {
       day_number: dayNumber
     });
 
-
     /**
-     * Step 6 — Generate Insight
+     * STEP 7 — Generate insight
      */
 
     await generateInsight({
       user_id: userId
     });
 
-
     /**
-     * Step 7 — Return summary safely
+     * STEP 8 — Return summary
      */
 
     res.json({
+
       status: "success",
+
       summary_text: summary,
+
       completedToday:
         latestSession.completion_status === "completed"
+
     });
 
-  } catch (error) {
+  }
+
+  catch (error) {
 
     const errorMessage =
       error instanceof Error
@@ -175,10 +266,13 @@ router.get("/today", async (req, res) => {
     );
 
     res.status(500).json({
+
       status: "error",
+
       message:
         errorMessage ||
         "Failed to get summary"
+
     });
 
   }
