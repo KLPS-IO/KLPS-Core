@@ -53,14 +53,34 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 2 — TEMPORARY:
-     * Disable completed-today lock
+     * STEP 2 — REAL completed-today check
      */
 
-    const completedToday =
-      false;
+    const completedTodayCheck =
+      await pool.query(
+        `
+        SELECT 1
+        FROM lema.daily_sessions
+        WHERE
+          user_id = $1
+          AND completion_status = 'completed'
+          AND completed_at AT TIME ZONE $2
+              >= date_trunc(
+                'day',
+                NOW() AT TIME ZONE $2
+              )
+        LIMIT 1
+        `,
+        [
+          userId,
+          APP_TIMEZONE
+        ]
+      );
 
-    if (completedToday) { {
+    const completedToday =
+      completedTodayCheck.rows.length > 0;
+
+    if (completedToday) {
 
       return res.json({
 
@@ -149,8 +169,6 @@ router.get("/today", async (req, res) => {
 
     /**
      * STEP 6 — Fetch questions
-     * RECOVERY MODE:
-     * No signal filtering
      */
 
     const result =
