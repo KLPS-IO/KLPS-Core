@@ -227,19 +227,32 @@ router.get("/today", async (req, res) => {
        */
 
       await pool.query(
-        `
-        INSERT INTO lema.daily_summaries (
-          user_id,
-          day_number,
-          summary_text
-        )
-        VALUES ($1, $2, $3)
-        `,
-        [
-          userId,
-          dayNumber,
-          summary
-        ]
+      `
+      INSERT INTO lema.daily_summaries (
+        user_id,
+        day_number,
+        calendar_date,
+        summary_text
+      )
+
+      VALUES (
+        $1,
+        $2,
+        CURRENT_DATE,
+        $3
+      )
+
+      ON CONFLICT (user_id, day_number)
+
+      DO UPDATE SET
+        summary_text = EXCLUDED.summary_text,
+        calendar_date = CURRENT_DATE;
+      `,
+      [
+        userId,
+        dayNumber,
+        summary
+      ]
       );
 
     }
