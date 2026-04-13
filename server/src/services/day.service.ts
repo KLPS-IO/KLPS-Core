@@ -3,14 +3,14 @@ import { pool } from "../storage/postgres.client";
 const APP_TIMEZONE =
   "Europe/London";
 
-type LatestSummaryRow = {
+type LatestSessionRow = {
   day_number: number;
   diff_days: number;
 };
 
-async function getLatestCompletedSummary(
+async function getLatestCompletedSession(
   userId: string
-): Promise<LatestSummaryRow | null> {
+): Promise<LatestSessionRow | null> {
 
   const result = await pool.query(
     `
@@ -18,11 +18,13 @@ async function getLatestCompletedSummary(
       day_number,
       (
         DATE(NOW() AT TIME ZONE $2)
-        - DATE(created_at AT TIME ZONE $2)
+        - DATE(completed_at AT TIME ZONE $2)
       ) AS diff_days
-    FROM lema.daily_summaries
-    WHERE user_id = $1
-    ORDER BY created_at DESC
+    FROM lema.daily_sessions
+    WHERE
+      user_id = $1
+      AND completion_status = 'completed'
+    ORDER BY completed_at DESC
     LIMIT 1
     `,
     [userId, APP_TIMEZONE]
@@ -32,7 +34,7 @@ async function getLatestCompletedSummary(
     return null;
   }
 
-  return result.rows[0] as LatestSummaryRow;
+  return result.rows[0] as LatestSessionRow;
 
 }
 
@@ -40,22 +42,34 @@ export async function getCurrentDay(
   userId: string
 ): Promise<number> {
 
-  const latestSummary =
-    await getLatestCompletedSummary(userId);
+  const latestSession =
+    await getLatestCompletedSession(userId);
 
-  if (!latestSummary) {
+  /**
+   * No completed sessions yet
+   */
+
+  if (!latestSession) {
     return 1;
   }
 
   const lastDay =
-    Number(latestSummary.day_number);
+    Number(latestSession.day_number);
 
   const diffDays =
-    Number(latestSummary.diff_days);
+    Number(latestSession.diff_days);
+
+  /**
+   * Same day → stay on same day
+   */
 
   if (diffDays <= 0) {
     return lastDay;
   }
+
+  /**
+   * Next day → advance
+   */
 
   return lastDay + 1;
 
@@ -72,17 +86,20 @@ export async function getSafeCurrentDay({
   const currentDay =
     await getCurrentDay(userId);
 
-  const maxDayResult = await pool.query(
-    `
-    SELECT MAX(day_number) AS max_day
-    FROM lema.questions
-    WHERE protocol_version = $1
-    `,
-    [protocolVersion]
-  );
+  const maxDayResult =
+    await pool.query(
+      `
+      SELECT MAX(day_number) AS max_day
+      FROM lema.questions
+      WHERE protocol_version = $1
+      `,
+      [protocolVersion]
+    );
 
   const maxDay =
-    Number(maxDayResult.rows[0]?.max_day ?? 1);
+    Number(
+      maxDayResult.rows[0]?.max_day ?? 1
+    );
 
   if (currentDay > maxDay) {
     return maxDay;
