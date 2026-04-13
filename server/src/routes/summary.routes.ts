@@ -137,33 +137,64 @@ router.get("/today", async (req, res) => {
       const responses =
         signalsResult.rows;
 
+      /**
+       * SMART REFLECTION ENGINE
+       */
+
       const reflectionParts: string[] = [];
 
-      const firstAnswer =
+      /**
+       * Find meaningful text response
+       */
+
+      const textResponse =
         responses.find(r =>
-          r.question_key.includes("q1")
+          r.response_value &&
+          r.response_value.length > 15
         );
 
-      if (firstAnswer) {
+      if (textResponse) {
 
         reflectionParts.push(
-          `You shared that "${firstAnswer.response_value}".`
+          `You shared that "${textResponse.response_value}".`
         );
 
       }
 
-      const emotionAnswer =
+      /**
+       * Find likely emotion
+       */
+
+      const emotionResponse =
         responses.find(r =>
-          r.question_key.includes("q2")
+          r.response_value &&
+          r.response_value.length > 0 &&
+          r.response_value.length < 25
         );
 
-      if (emotionAnswer) {
+      if (emotionResponse) {
 
         reflectionParts.push(
-          `You noticed feeling ${emotionAnswer.response_value}.`
+          `You noticed feeling ${emotionResponse.response_value}.`
         );
 
       }
+
+      /**
+       * Add encouragement logic
+       */
+
+      if (reflectionParts.length > 0) {
+
+        reflectionParts.push(
+          "Taking time to notice these experiences builds awareness and consistency."
+        );
+
+      }
+
+      /**
+       * Fallback safety
+       */
 
       if (reflectionParts.length === 0) {
 
@@ -177,7 +208,23 @@ router.get("/today", async (req, res) => {
         reflectionParts.join(" ");
 
       /**
-       * Save summary safely
+       * Prevent duplicate inserts
+       */
+
+      await pool.query(
+        `
+        DELETE FROM lema.daily_summaries
+        WHERE user_id = $1
+        AND day_number = $2
+        `,
+        [
+          userId,
+          dayNumber
+        ]
+      );
+
+      /**
+       * Save summary
        */
 
       await pool.query(
