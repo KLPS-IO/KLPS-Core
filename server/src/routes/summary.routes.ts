@@ -348,8 +348,13 @@ router.get("/word-cloud", async (req, res) => {
     "myself","yourself","ourselves",
     "things","thing","something",
 
-    "day","time","week"
+    "day","time","week",
 
+    "will", "made", "having",
+    "ive", "didnt", "how",
+    "last", "much","fine", "able",
+    "them", "code","test", "kind"
+    
     ]);
 
     type SignalRow = {
