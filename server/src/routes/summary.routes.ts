@@ -343,7 +343,12 @@ router.get("/word-cloud", async (req, res) => {
     "one","yes","its","about",
     "have","get","got","out",
     "into","than","then",
-    "too","also","just"
+    "too","also","just",
+
+    "myself","yourself","ourselves",
+    "things","thing","something",
+
+    "day","time","week"
 
     ]);
 
