@@ -3,36 +3,37 @@ import { pool } from "../storage/postgres.client";
 const PATTERN_GROUPS: Record<string, string[]> = {
 
   resilience: [
-    "perseverance",
-    "overcame",
-    "persist",
     "keep going",
-    "against the odds",
-    "progress",
-    "goals"
+    "persist",
+    "continued",
+    "pushed",
+    "managed",
+    "progress"
   ],
 
   fatigue: [
     "tired",
-    "bloated",
     "heavy",
     "exhausted",
-    "low energy"
+    "low energy",
+    "rested",
+    "fatigue"
   ],
 
   stress: [
-    "anxiety",
     "overwhelmed",
     "pressure",
-    "mistake",
-    "stress"
+    "stress",
+    "anxious",
+    "tense"
   ],
 
   growth: [
+    "learning",
     "improve",
+    "better",
     "progress",
-    "achievement",
-    "learning"
+    "aware"
   ]
 
 };
@@ -94,10 +95,10 @@ function buildPatternMessage(
     sorted[0];
 
   /**
-   * Require at least 2 signals
+   Require minimum signal strength
    */
 
-  if (count < 2) {
+  if (count < 3) {
 
     return "";
 
@@ -105,25 +106,25 @@ function buildPatternMessage(
 
   if (pattern === "resilience") {
 
-    return "I've noticed a pattern of perseverance in how you've been approaching your days. You keep moving forward even when things feel challenging.";
+    return "You've been showing perseverance across recent days. Even when things feel difficult, you keep moving forward.";
 
   }
 
   if (pattern === "fatigue") {
 
-    return "I've noticed your body signals suggest periods of tiredness or heaviness. Listening to those signals can help you move with more balance.";
+    return "Your recent body signals suggest periods of tiredness. Listening to those signals may help you maintain balance.";
 
   }
 
   if (pattern === "stress") {
 
-    return "I've noticed moments of pressure appearing in your reflections. The way you continue despite that shows strength.";
+    return "Pressure or tension has appeared recently. Noticing this is the first step toward managing it.";
 
   }
 
   if (pattern === "growth") {
 
-    return "I've noticed steady growth in how you're reflecting and moving forward. You're building momentum.";
+    return "You're showing signs of steady growth. Your reflections suggest increasing awareness.";
 
   }
 
@@ -138,15 +139,24 @@ export async function generateInsight({
 }) {
 
   /**
-   * Step 1 — Fetch all responses
+   Step 1 — Fetch RECENT responses
    */
 
   const result =
     await pool.query(
       `
       SELECT response_value
+
       FROM lema.signals
-      WHERE user_id = $1
+
+      WHERE
+        user_id = $1
+
+        AND day_number >= (
+          SELECT MAX(day_number) - 6
+          FROM lema.signals
+          WHERE user_id = $1
+        )
       `,
       [user_id]
     );
@@ -163,14 +173,14 @@ export async function generateInsight({
   }
 
   /**
-   * Step 2 — Detect patterns
+   Step 2 — Detect patterns
    */
 
   const patternCounts =
     detectPatterns(responses);
 
   /**
-   * Step 3 — Build message
+   Step 3 — Build message
    */
 
   const patternMessage =
@@ -185,7 +195,7 @@ export async function generateInsight({
   }
 
   /**
-   * Step 4 — Prevent duplicates
+   Step 4 — Prevent duplicates
    */
 
   const existing =
@@ -210,7 +220,7 @@ export async function generateInsight({
   }
 
   /**
-   * Step 5 — Save insight
+   Step 5 — Save insight
    */
 
   await pool.query(
