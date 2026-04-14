@@ -28,6 +28,10 @@ export const saveDailySummary = async ({
     WHERE
       user_id = $1
       AND day_number = $2
+
+    ORDER BY
+      domain,
+      question_key
     `,
     [user_id, day_number]
   );
@@ -41,6 +45,8 @@ export const saveDailySummary = async ({
 
   let summary =
     "Today you showed:\n\n";
+
+  let addedLines = 0;
 
   responses.forEach((r) => {
 
@@ -59,7 +65,9 @@ export const saveDailySummary = async ({
     if (domain === "reflection") {
 
       summary +=
-        `• Reflection: ${value}\n`;
+        `• You reflected on: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -70,7 +78,9 @@ export const saveDailySummary = async ({
     else if (domain === "emotion") {
 
       summary +=
-        `• Feeling: ${value}\n`;
+        `• You felt: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -81,7 +91,9 @@ export const saveDailySummary = async ({
     else if (domain === "body") {
 
       summary +=
-        `• Body signal: ${value}\n`;
+        `• Your body felt: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -92,7 +104,9 @@ export const saveDailySummary = async ({
     else if (domain === "cycle") {
 
       summary +=
-        `• Cycle state: ${value}\n`;
+        `• Cycle state noted: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -103,7 +117,9 @@ export const saveDailySummary = async ({
     else if (domain === "environment") {
 
       summary +=
-        `• Environment: ${value}\n`;
+        `• Your environment included: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -114,7 +130,9 @@ export const saveDailySummary = async ({
     else if (domain === "social") {
 
       summary +=
-        `• Social: ${value}\n`;
+        `• Social connection: ${value}\n`;
+
+      addedLines++;
 
     }
 
@@ -127,6 +145,8 @@ export const saveDailySummary = async ({
       summary +=
         `• ${value}\n`;
 
+      addedLines++;
+
     }
 
   });
@@ -135,15 +155,19 @@ export const saveDailySummary = async ({
    Safety fallback
    */
 
-  if (
-    summary.trim() ===
-    "Today you showed:"
-  ) {
+  if (addedLines === 0) {
 
     summary +=
       "• You showed up today.\n";
 
   }
+
+  /**
+   Add closing reinforcement
+   */
+
+  summary +=
+    "\nYou're building consistency — one day at a time.";
 
   /**
    3 — Generate behaviour insight
