@@ -21,6 +21,10 @@ import {
 
 const router = express.Router();
 
+/* -------------------------------------------------- */
+/* TODAY ROUTE — ORIGINAL BEHAVIOUR */
+/* -------------------------------------------------- */
+
 router.get("/today", async (req, res) => {
 
   try {
@@ -207,25 +211,11 @@ router.get("/today", async (req, res) => {
         reflectionParts.join(" ");
 
       /**
-       * Prevent duplicate summaries
+       * IMPORTANT:
+       * No DELETE — ON CONFLICT handles safely
        */
 
-      await pool.query(
-        `
-        DELETE FROM lema.daily_summaries
-        WHERE user_id = $1
-        AND day_number = $2
-        `,
-        [
-          userId,
-          dayNumber
-        ]
-      );
-
-      /**
-       * Save summary
-       */
-
+      
       await pool.query(
       `
       INSERT INTO lema.daily_summaries (
@@ -275,7 +265,7 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 7 — Generate insight (SAFE MODE)
+     * STEP 7 — Generate insight
      */
 
     try {
@@ -284,7 +274,9 @@ router.get("/today", async (req, res) => {
         user_id: userId
       });
 
-    } catch (error) {
+    }
+
+    catch (error) {
 
       console.error(
         "Insight generation failed:",
@@ -311,11 +303,6 @@ router.get("/today", async (req, res) => {
 
   catch (error) {
 
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
     console.error(
       "Summary route error:",
       error
@@ -325,12 +312,152 @@ router.get("/today", async (req, res) => {
 
       status: "error",
 
-      message: errorMessage
+      message: "Failed"
 
     });
 
   }
 
 });
+
+
+/* -------------------------------------------------- */
+/* WORD CLOUD ROUTE — NEW SAFE ADDITION */
+/* -------------------------------------------------- */
+
+router.get("/word-cloud", async (req, res) => {
+
+  try {
+
+    const stopWords =
+      new Set<string>([
+
+        "the","and","is","to","a","i",
+        "me","my","you","it","in",
+        "on","for","with","that",
+        "this","was","are","today",
+        "very","feel","felt"
+
+      ]);
+
+    type SignalRow = {
+      response_value: string | null;
+    };
+
+    function processWords(
+      rows: SignalRow[]
+    ) {
+
+      const counts:
+        Record<string, number> = {};
+
+      rows.forEach(row => {
+
+        if (!row.response_value) return;
+
+        const words: string[] =
+          row.response_value
+            .toLowerCase()
+            .replace(/[^\w\s]/g, "")
+            .split(/\s+/);
+
+        words.forEach((word: string) => {
+
+          if (
+            !word ||
+            stopWords.has(word) ||
+            word.length < 3
+          ) return;
+
+          counts[word] =
+            (counts[word] || 0) + 1;
+
+        });
+
+      });
+
+      return Object.entries(counts)
+
+        .map(([text, value]) => ({
+
+          text,
+          value
+
+        }))
+
+        .sort((a, b) =>
+          b.value - a.value
+        )
+
+        .slice(0, 50);
+
+    }
+
+    /**
+     * HISTORICAL
+     */
+
+    const historicalResult =
+      await pool.query<SignalRow>(`
+
+        SELECT response_value
+        FROM lema.signals
+        WHERE response_value IS NOT NULL
+
+      `);
+
+    /**
+     * LAST 7 DAYS
+     */
+
+    const last7Result =
+      await pool.query<SignalRow>(`
+
+        SELECT response_value
+        FROM lema.signals
+        WHERE response_value IS NOT NULL
+        AND created_at >= NOW() - INTERVAL '7 days'
+
+      `);
+
+    const historical =
+      processWords(
+        historicalResult.rows
+      );
+
+    const last7Days =
+      processWords(
+        last7Result.rows
+      );
+
+    return res.json({
+
+      last7Days,
+      historical
+
+    });
+
+  }
+
+  catch (error) {
+
+    console.error(
+      "Word cloud error:",
+      error
+    );
+
+    return res.status(500).json({
+
+      status: "error",
+
+      message:
+        "Failed to generate word cloud"
+
+    });
+
+  }
+
+});
+
 
 export default router;
