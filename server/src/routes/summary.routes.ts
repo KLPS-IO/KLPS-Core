@@ -154,7 +154,7 @@ router.get("/today", async (req, res) => {
         responses
           .filter(r =>
             r.response_value &&
-            r.response_value.length > 10
+            r.response_value.length > 3
           )
           .sort(
             (a, b) =>

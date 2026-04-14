@@ -1,10 +1,8 @@
-import { pool } from "../storage/postgres.client";
+import { pool }
+from "../storage/postgres.client";
 
 import { generateInsight }
 from "./insight.service";
-
-import { saveInsight }
-from "./insight.persistence.service";
 
 export const saveDailySummary = async ({
   user_id,
@@ -15,15 +13,18 @@ export const saveDailySummary = async ({
 }) => {
 
   /**
-   * 1 — Get today's signals
+   1 — Get today's signals
    */
 
   const signals = await pool.query(
     `
     SELECT
       question_key,
-      response_value
+      response_value,
+      domain
+
     FROM lema.signals
+
     WHERE
       user_id = $1
       AND day_number = $2
@@ -35,7 +36,7 @@ export const saveDailySummary = async ({
     signals.rows;
 
   /**
-   * 2 — Build summary text
+   2 — Build meaningful summary
    */
 
   let summary =
@@ -43,64 +44,109 @@ export const saveDailySummary = async ({
 
   responses.forEach((r) => {
 
-    if (
-      r.question_key &&
-      r.question_key.includes("progress")
-    ) {
+    const value =
+      r.response_value;
+
+    const domain =
+      r.domain;
+
+    if (!value) return;
+
+    /**
+     Reflection
+     */
+
+    if (domain === "reflection") {
 
       summary +=
-        `• Progress: ${r.response_value}\n`;
+        `• Reflection: ${value}\n`;
 
     }
 
-    if (
-      r.question_key &&
-      r.question_key.includes("reflection")
-    ) {
+    /**
+     Emotion
+     */
+
+    else if (domain === "emotion") {
 
       summary +=
-        `• Reflection: ${r.response_value}\n`;
+        `• Feeling: ${value}\n`;
 
     }
 
-    if (
-      r.question_key &&
-      r.question_key.includes("block")
-    ) {
+    /**
+     Body
+     */
+
+    else if (domain === "body") {
 
       summary +=
-        `• Challenge: ${r.response_value}\n`;
+        `• Body signal: ${value}\n`;
 
     }
 
-    if (
-      r.question_key &&
-      r.question_key.includes("support")
-    ) {
+    /**
+     Cycle
+     */
+
+    else if (domain === "cycle") {
 
       summary +=
-        `• Support: ${r.response_value}\n`;
+        `• Cycle state: ${value}\n`;
 
     }
 
-    if (
-      r.question_key &&
-      r.question_key.includes("future")
-    ) {
+    /**
+     Environment
+     */
+
+    else if (domain === "environment") {
 
       summary +=
-        `• Next Step: ${r.response_value}\n`;
+        `• Environment: ${value}\n`;
+
+    }
+
+    /**
+     Social
+     */
+
+    else if (domain === "social") {
+
+      summary +=
+        `• Social: ${value}\n`;
+
+    }
+
+    /**
+     Fallback
+     */
+
+    else {
+
+      summary +=
+        `• ${value}\n`;
 
     }
 
   });
 
   /**
-   * 3 — Generate behaviour insight
-   *
-   * IMPORTANT:
-   * generateInsight() returns void
-   * so we DO NOT store it in a variable
+   Safety fallback
+   */
+
+  if (
+    summary.trim() ===
+    "Today you showed:"
+  ) {
+
+    summary +=
+      "• You showed up today.\n";
+
+  }
+
+  /**
+   3 — Generate behaviour insight
    */
 
   try {
@@ -109,7 +155,9 @@ export const saveDailySummary = async ({
       user_id
     });
 
-  } catch (error) {
+  }
+
+  catch (error) {
 
     console.error(
       "Insight generation failed:",
@@ -119,45 +167,42 @@ export const saveDailySummary = async ({
   }
 
   /**
-   * 4 — Save summary
+   4 — Save summary
    */
 
   await pool.query(
-  `
-  INSERT INTO lema.daily_summaries (
-    id,
-    user_id,
-    day_number,
-    calendar_date,
-    created_at,
-    summary_text,
-    insight_data
-  )
+    `
+    INSERT INTO lema.daily_summaries (
+      id,
+      user_id,
+      day_number,
+      created_at,
+      summary_text,
+      insight_data
+    )
 
-  VALUES (
-    gen_random_uuid(),
-    $1,
-    $2,
-    CURRENT_DATE,
-    NOW(),
-    $3,
-    $4
-  )
+    VALUES (
+      gen_random_uuid(),
+      $1,
+      $2,
+      NOW(),
+      $3,
+      $4
+    )
 
-  ON CONFLICT (user_id, day_number)
+    ON CONFLICT (user_id, day_number)
 
-  DO UPDATE SET
-    summary_text = EXCLUDED.summary_text,
-    insight_data = EXCLUDED.insight_data,
-    calendar_date = CURRENT_DATE,
-    created_at = NOW();
-  `,
-  [
-    user_id,
-    day_number,
-    summary,
-    JSON.stringify({})
-  ]
+    DO UPDATE SET
+      summary_text = EXCLUDED.summary_text,
+      insight_data = EXCLUDED.insight_data,
+      created_at = NOW();
+    `,
+    [
+      user_id,
+      day_number,
+      summary,
+      JSON.stringify({})
+    ]
   );
 
   return summary;
