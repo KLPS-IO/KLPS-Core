@@ -253,6 +253,13 @@ router.get(
 
         FROM lema.daily_patterns
 
+        WHERE
+          pattern_key NOT IN (
+            'low',
+            'medium',
+            'high'
+          )
+
         GROUP BY pattern_key
 
         ORDER BY count DESC
