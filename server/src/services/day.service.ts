@@ -16,22 +16,29 @@ async function getLatestCompletedSession(
     `
     SELECT
       day_number,
+
       (
         DATE(NOW() AT TIME ZONE $2)
         - DATE(completed_at AT TIME ZONE $2)
       ) AS diff_days
+
     FROM lema.daily_sessions
+
     WHERE
       user_id = $1
       AND completion_status = 'completed'
+
     ORDER BY completed_at DESC
+
     LIMIT 1
     `,
     [userId, APP_TIMEZONE]
   );
 
   if (result.rows.length === 0) {
+
     return null;
+
   }
 
   return result.rows[0] as LatestSessionRow;
@@ -46,11 +53,13 @@ export async function getCurrentDay(
     await getLatestCompletedSession(userId);
 
   /**
-   * No completed sessions yet
+   No completed sessions → Day 1
    */
 
   if (!latestSession) {
+
     return 1;
+
   }
 
   const lastDay =
@@ -60,15 +69,19 @@ export async function getCurrentDay(
     Number(latestSession.diff_days);
 
   /**
-   * Same day → stay on same day
+   Same day → stay
    */
 
   if (diffDays <= 0) {
+
     return lastDay;
+
   }
 
   /**
-   * Next day → advance
+   Next day OR missed days
+   → Only advance ONE day
+   (never skip days)
    */
 
   return lastDay + 1;
@@ -101,8 +114,24 @@ export async function getSafeCurrentDay({
       maxDayResult.rows[0]?.max_day ?? 1
     );
 
+  /**
+   Prevent overflow past protocol
+   */
+
   if (currentDay > maxDay) {
+
     return maxDay;
+
+  }
+
+  /**
+   Safety floor
+   */
+
+  if (currentDay < 1) {
+
+    return 1;
+
   }
 
   return currentDay;
