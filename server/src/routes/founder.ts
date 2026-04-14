@@ -248,12 +248,12 @@ router.get(
         await pool.query(`
 
         SELECT
-          pattern_type AS pattern,
+          pattern_key AS pattern,
           SUM(frequency)::int AS count
 
         FROM lema.daily_patterns
 
-        GROUP BY pattern_type
+        GROUP BY pattern_key
 
         ORDER BY count DESC
 
