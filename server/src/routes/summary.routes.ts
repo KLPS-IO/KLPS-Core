@@ -409,7 +409,6 @@ router.get("/word-cloud", async (req, res) => {
         )
 
         .slice(0, 50);
-
     }
 
     /**
@@ -478,5 +477,57 @@ router.get("/word-cloud", async (req, res) => {
 
 });
 
+/* -------------------------------------------------- */
+/* PATTERN FREQUENCY — INVESTOR SAFE METRIC */
+/* -------------------------------------------------- */
+
+router.get(
+  "/pattern-frequency",
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(`
+
+        SELECT
+          pattern_type AS pattern,
+          COUNT(*)::int AS count
+
+        FROM lema.detected_patterns
+
+        GROUP BY pattern_type
+
+        ORDER BY count DESC
+
+        LIMIT 10
+
+        `);
+
+      return res.json(
+        result.rows
+      );
+
+    }
+
+    catch (error) {
+
+      console.error(
+        "Pattern frequency error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        status: "error",
+        message:
+          "Failed to fetch pattern frequency"
+
+      });
+
+    }
+
+  }
+);
 
 export default router;
