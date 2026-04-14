@@ -330,15 +330,22 @@ router.get("/word-cloud", async (req, res) => {
   try {
 
     const stopWords =
-      new Set<string>([
+  new Set<string>([
 
-        "the","and","is","to","a","i",
-        "me","my","you","it","in",
-        "on","for","with","that",
-        "this","was","are","today",
-        "very","feel","felt"
+    "the","and","is","to","a","i",
+    "me","my","you","it","in",
+    "on","for","with","that",
+    "this","was","are","today",
+    "very","feel","felt",
 
-      ]);
+    "but","been","more","some",
+    "had","did","not","when",
+    "one","yes","its","about",
+    "have","get","got","out",
+    "into","than","then",
+    "too","also","just"
+
+    ]);
 
     type SignalRow = {
       response_value: string | null;
