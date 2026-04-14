@@ -2,6 +2,8 @@
 
 import { Router } from "express";
 import db from "../config/db";
+import { pool }
+from "../storage/postgres.client";
 const router = Router();
 
 /*
@@ -225,6 +227,60 @@ router.get(
       res.status(500).json({
         error:
           "Failed to fetch user growth"
+      });
+
+    }
+
+  }
+);
+
+/* -------------------------------------------------- */
+/* PATTERN FREQUENCY — INVESTOR SAFE */
+/* -------------------------------------------------- */
+
+router.get(
+  "/pattern-frequency",
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(`
+
+        SELECT
+          pattern_type AS pattern,
+          SUM(frequency)::int AS count
+
+        FROM lema.daily_patterns
+
+        GROUP BY pattern_type
+
+        ORDER BY count DESC
+
+        LIMIT 10
+
+        `);
+
+      return res.json(
+        result.rows
+      );
+
+    }
+
+    catch (error) {
+
+      console.error(
+        "Pattern frequency error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        status: "error",
+
+        message:
+          "Failed to fetch pattern frequency"
+
       });
 
     }
