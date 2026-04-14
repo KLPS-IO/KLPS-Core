@@ -151,10 +151,16 @@ router.get("/today", async (req, res) => {
        */
 
       const textResponse =
-        responses.find(r =>
-          r.response_value &&
-          r.response_value.length > 15
-        );
+        responses
+          .filter(r =>
+            r.response_value &&
+            r.response_value.length > 10
+          )
+          .sort(
+            (a, b) =>
+              b.response_value.length -
+              a.response_value.length
+          )[0];
 
       if (textResponse) {
 
