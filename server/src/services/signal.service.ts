@@ -48,6 +48,7 @@ export const saveSignal = async ({
       q.question_text,
       q.domain,
       q.response_type,
+      q.allow_multiple,
 
       COALESCE(
         json_agg(
