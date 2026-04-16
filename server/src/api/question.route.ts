@@ -210,6 +210,7 @@ router.get("/today", async (req, res) => {
           q.question_text,
           q.domain,
           q.response_type,
+          q.allow_multiple,
 
           COALESCE(
             json_agg(
