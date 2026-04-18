@@ -361,7 +361,8 @@ router.get("/word-cloud", async (req, res) => {
     "last", "much","fine", "able",
     "them", "code","test", "kind",
     "feeling", "done", "through", "body",
-    "watch", "like", "all","want",
+    "watch", "like", "all","want", "from",
+    "doing"
 
     ]);
 
