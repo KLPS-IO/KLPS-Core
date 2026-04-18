@@ -261,6 +261,23 @@ router.get("/today", async (req, res) => {
       user_id: userId
     });
 
+    const streakResult =
+      await pool.query(
+        `
+        SELECT current_streak
+        FROM lema.streaks
+        WHERE user_id = $1
+        LIMIT 1
+        `,
+        [userId]
+      );
+
+    const currentStreak =
+      Number(
+        streakResult.rows[0]
+          ?.current_streak ?? 0
+      );
+
     /**
      * STEP 6 — Detect patterns
      */
@@ -301,7 +318,11 @@ router.get("/today", async (req, res) => {
 
       summary_text: summary,
 
-      completedToday: true
+      completedToday: true,
+
+      lastCompletedDay: dayNumber,
+
+      currentStreak
 
     });
 

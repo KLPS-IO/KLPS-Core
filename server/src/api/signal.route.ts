@@ -3,6 +3,7 @@ import express from "express";
 import { saveSignal } from "../services/signal.service";
 
 import { pool } from "../storage/postgres.client";
+import { updateStreak } from "../services/streak.service";
 
 import {
   startSessionIfNeeded
@@ -180,14 +181,74 @@ router.post("/signal", async (req, res) => {
         ]
       );
 
+      /**
+       * Keep streak in sync immediately so
+       * completion screen can show fresh value
+       * without requiring a refresh.
+       */
+      await updateStreak({
+        user_id
+      });
+
     }
+
+    const completedMetaResult =
+      await pool.query(
+        `
+        SELECT
+          COALESCE(
+            MAX(
+              CASE
+                WHEN completion_status = 'completed'
+                THEN day_number
+                ELSE NULL
+              END
+            ),
+            1
+          )::int AS last_completed_day
+        FROM lema.daily_sessions
+        WHERE user_id = $1
+        `,
+        [user_id]
+      );
+
+    const streakResult =
+      await pool.query(
+        `
+        SELECT current_streak
+        FROM lema.streaks
+        WHERE user_id = $1
+        LIMIT 1
+        `,
+        [user_id]
+      );
+
+    const lastCompletedDay =
+      Number(
+        completedMetaResult.rows[0]
+          ?.last_completed_day ?? 1
+      );
+
+    const currentStreak =
+      Number(
+        streakResult.rows[0]
+          ?.current_streak ?? 0
+      );
+
+    const isDayComplete =
+      answeredQuestions >= totalQuestions;
 
 
     res.status(200).json({
 
       status: "saved",
 
-      data: result
+      data: {
+        ...result,
+        isDayComplete,
+        lastCompletedDay,
+        currentStreak
+      }
 
     });
 
