@@ -9,11 +9,11 @@ from "../services/session.service";
 
 import { ensureUserProfile }
 from "../services/user-profile.service";
+import {
+  resolveTimezone
+} from "../services/timezone.service";
 
 const router = express.Router();
-
-const APP_TIMEZONE =
-  "Europe/London";
 
 router.get("/today", async (req, res) => {
 
@@ -25,6 +25,14 @@ router.get("/today", async (req, res) => {
 
     const userId =
       req.query.user_id as string;
+    const timezone =
+      resolveTimezone({
+        queryTimezone:
+          req.query.timezone ??
+          req.query.tz,
+        headerTimezone:
+          req.header("x-timezone")
+      });
 
     if (!userId) {
 
@@ -95,7 +103,7 @@ router.get("/today", async (req, res) => {
         `,
         [
           userId,
-          APP_TIMEZONE
+          timezone
         ]
       );
 
@@ -135,7 +143,9 @@ router.get("/today", async (req, res) => {
         userId,
 
         protocolVersion:
-          "EARLY_V1"
+          "EARLY_V1",
+
+        timezone
 
       });
 

@@ -1,9 +1,5 @@
 import express from "express";
 
-import {
-  completeSession
-} from "../services/session.service";
-
 import { pool }
 from "../storage/postgres.client";
 
@@ -18,6 +14,9 @@ import {
 import {
   generateInsight
 } from "../services/insight.service";
+import {
+  resolveTimezone
+} from "../services/timezone.service";
 
 const router = express.Router();
 
@@ -31,6 +30,14 @@ router.get("/today", async (req, res) => {
 
     const userId =
       req.query.user_id as string;
+    const timezone =
+      resolveTimezone({
+        queryTimezone:
+          req.query.timezone ??
+          req.query.tz,
+        headerTimezone:
+          req.header("x-timezone")
+      });
 
     if (!userId) {
 
@@ -50,11 +57,21 @@ router.get("/today", async (req, res) => {
         `
         SELECT *
         FROM lema.daily_sessions
-        WHERE user_id = $1
-        ORDER BY created_at DESC
+        WHERE
+          user_id = $1
+          AND completion_status = 'completed'
+          AND completed_at AT TIME ZONE $2
+              >= date_trunc(
+                'day',
+                NOW() AT TIME ZONE $2
+              )
+        ORDER BY completed_at DESC
         LIMIT 1
         `,
-        [userId]
+        [
+          userId,
+          timezone
+        ]
       );
 
     if (sessionResult.rows.length === 0) {
@@ -99,22 +116,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 3 — Complete session
-     */
-
-    if (
-      latestSession.completion_status !== "completed"
-    ) {
-
-      await completeSession({
-        user_id: userId,
-        day_number: dayNumber
-      });
-
-    }
-
-    /**
-     * STEP 4 — Generate summary if missing
+     * STEP 3 — Generate summary if missing
      */
 
     if (!summary) {
@@ -234,7 +236,7 @@ router.get("/today", async (req, res) => {
       VALUES (
         $1,
         $2,
-        CURRENT_DATE,
+        DATE(NOW() AT TIME ZONE $4),
         $3
       )
 
@@ -242,23 +244,26 @@ router.get("/today", async (req, res) => {
 
       DO UPDATE SET
         summary_text = EXCLUDED.summary_text,
-        calendar_date = CURRENT_DATE;
+        calendar_date =
+          DATE(NOW() AT TIME ZONE $4);
       `,
       [
         userId,
         dayNumber,
-        summary
+        summary,
+        timezone
       ]
       );
 
     }
 
     /**
-     * STEP 5 — Update streak
+     * STEP 4 — Update streak
      */
 
     await updateStreak({
-      user_id: userId
+      user_id: userId,
+      timezone
     });
 
     const streakResult =
@@ -279,7 +284,7 @@ router.get("/today", async (req, res) => {
       );
 
     /**
-     * STEP 6 — Detect patterns
+     * STEP 5 — Detect patterns
      */
 
     await detectPatterns({
@@ -288,7 +293,7 @@ router.get("/today", async (req, res) => {
     });
 
     /**
-     * STEP 7 — Generate insight
+     * STEP 6 — Generate insight
      */
 
     try {
@@ -309,7 +314,7 @@ router.get("/today", async (req, res) => {
     }
 
     /**
-     * STEP 8 — Return summary
+     * STEP 7 — Return summary
      */
 
     return res.json({

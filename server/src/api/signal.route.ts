@@ -12,6 +12,9 @@ import {
 import {
   getSafeCurrentDay
 } from "../services/day.service";
+import {
+  resolveTimezone
+} from "../services/timezone.service";
 
 const router = express.Router();
 
@@ -39,6 +42,14 @@ router.post("/signal", async (req, res) => {
       question_key,
       response_value
     } = req.body;
+    const timezone =
+      resolveTimezone({
+        bodyTimezone:
+          req.body?.timezone ??
+          req.body?.tz,
+        headerTimezone:
+          req.header("x-timezone")
+      });
 
     if (!user_id) {
 
@@ -66,7 +77,8 @@ router.post("/signal", async (req, res) => {
     const dayNumber =
       await getSafeCurrentDay({
         userId: user_id,
-        protocolVersion: "EARLY_V1"
+        protocolVersion: "EARLY_V1",
+        timezone
       });
 
 
@@ -187,7 +199,8 @@ router.post("/signal", async (req, res) => {
        * without requiring a refresh.
        */
       await updateStreak({
-        user_id
+        user_id,
+        timezone
       });
 
     }

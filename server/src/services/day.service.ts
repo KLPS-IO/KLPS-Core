@@ -1,7 +1,7 @@
 import { pool } from "../storage/postgres.client";
-
-const APP_TIMEZONE =
-  "Europe/London";
+import {
+  DEFAULT_TIMEZONE
+} from "./timezone.service";
 
 type LatestSessionRow = {
   day_number: number;
@@ -9,7 +9,8 @@ type LatestSessionRow = {
 };
 
 async function getLatestCompletedSession(
-  userId: string
+  userId: string,
+  timezone: string
 ): Promise<LatestSessionRow | null> {
 
   const result = await pool.query(
@@ -32,7 +33,7 @@ async function getLatestCompletedSession(
 
     LIMIT 1
     `,
-    [userId, APP_TIMEZONE]
+    [userId, timezone]
   );
 
   if (result.rows.length === 0) {
@@ -46,11 +47,16 @@ async function getLatestCompletedSession(
 }
 
 export async function getCurrentDay(
-  userId: string
+  userId: string,
+  timezone: string =
+    DEFAULT_TIMEZONE
 ): Promise<number> {
 
   const latestSession =
-    await getLatestCompletedSession(userId);
+    await getLatestCompletedSession(
+      userId,
+      timezone
+    );
 
   /**
    No completed sessions → Day 1
@@ -90,14 +96,19 @@ export async function getCurrentDay(
 
 export async function getSafeCurrentDay({
   userId,
-  protocolVersion
+  protocolVersion,
+  timezone = DEFAULT_TIMEZONE
 }: {
   userId: string;
   protocolVersion: string;
+  timezone?: string;
 }): Promise<number> {
 
   const currentDay =
-    await getCurrentDay(userId);
+    await getCurrentDay(
+      userId,
+      timezone
+    );
 
   const maxDayResult =
     await pool.query(

@@ -6,6 +6,10 @@ import {
   getCurrentDay,
   getSafeCurrentDay
 } from "./day.service";
+import {
+  DEFAULT_TIMEZONE,
+  resolveTimezone
+} from "./timezone.service";
 
 type QueryResultRow = Record<string, unknown>;
 
@@ -48,7 +52,8 @@ test("getCurrentDay returns day 1 when the user has no completed summary", async
 
     assert.equal(day, 1);
     assert.equal(calls.length, 1);
-    assert.match(calls[0].text, /FROM lema\.daily_summaries/);
+    assert.match(calls[0].text, /FROM lema\.daily_sessions/);
+    assert.equal(calls[0].params[1], "UTC");
 
   } finally {
 
@@ -88,12 +93,17 @@ test("getCurrentDay stays on the same day when the latest summary was created to
 
     const day =
       await getCurrentDay(
-        "11111111-1111-1111-1111-111111111111"
+        "11111111-1111-1111-1111-111111111111",
+        "Europe/London"
       );
 
     assert.equal(day, 4);
     assert.equal(calls.length, 1);
-    assert.match(calls[0].text, /FROM lema\.daily_summaries/);
+    assert.match(calls[0].text, /FROM lema\.daily_sessions/);
+    assert.equal(
+      calls[0].params[1],
+      "Europe/London"
+    );
 
   } finally {
 
@@ -133,12 +143,17 @@ test("getCurrentDay advances when the latest summary was completed on a prior ca
 
     const day =
       await getCurrentDay(
-        "11111111-1111-1111-1111-111111111111"
+        "11111111-1111-1111-1111-111111111111",
+        "Africa/Tunis"
       );
 
     assert.equal(day, 5);
     assert.equal(calls.length, 1);
-    assert.match(calls[0].text, /FROM lema\.daily_summaries/);
+    assert.match(calls[0].text, /FROM lema\.daily_sessions/);
+    assert.equal(
+      calls[0].params[1],
+      "Africa/Tunis"
+    );
 
   } finally {
 
@@ -192,12 +207,17 @@ test("getSafeCurrentDay clamps the day to the protocol max", async () => {
       await getSafeCurrentDay({
         userId:
           "22222222-2222-2222-2222-222222222222",
-        protocolVersion: "EARLY_V1"
+        protocolVersion: "EARLY_V1",
+        timezone: "America/New_York"
       });
 
     assert.equal(day, 3);
     assert.equal(calls.length, 2);
-    assert.match(calls[0].text, /FROM lema\.daily_summaries/);
+    assert.match(calls[0].text, /FROM lema\.daily_sessions/);
+    assert.equal(
+      calls[0].params[1],
+      "America/New_York"
+    );
     assert.match(calls[1].text, /FROM lema\.questions/);
 
   } finally {
@@ -205,5 +225,39 @@ test("getSafeCurrentDay clamps the day to the protocol max", async () => {
     pool.query = originalQuery;
 
   }
+
+});
+
+test("resolveTimezone prefers valid body timezone", () => {
+
+  const timezone =
+    resolveTimezone({
+      bodyTimezone:
+        "Africa/Tunis",
+      queryTimezone:
+        "Europe/London",
+      headerTimezone:
+        "America/New_York"
+    });
+
+  assert.equal(
+    timezone,
+    "Africa/Tunis"
+  );
+
+});
+
+test("resolveTimezone falls back to default timezone", () => {
+
+  const timezone =
+    resolveTimezone({
+      bodyTimezone:
+        "Invalid/Timezone"
+    });
+
+  assert.equal(
+    timezone,
+    DEFAULT_TIMEZONE
+  );
 
 });

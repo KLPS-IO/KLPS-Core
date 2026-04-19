@@ -1,25 +1,38 @@
 import { pool } from "../storage/postgres.client";
+import {
+  DEFAULT_TIMEZONE
+} from "./timezone.service";
 
 /**
  * Update user streak after session completion
  */
 export const updateStreak = async ({
-  user_id
+  user_id,
+  timezone = DEFAULT_TIMEZONE
 }: {
   user_id: string;
+  timezone?: string;
 }) => {
-
-  const today = new Date();
-  today.setHours(0,0,0,0);
 
   const existing = await pool.query(
     `
-    SELECT *
+    SELECT
+      current_streak,
+      longest_streak,
+      freeze_tokens,
+      last_active,
+      (
+        DATE(NOW() AT TIME ZONE $2)
+        - last_active
+      )::int AS diff_days
     FROM lema.streaks
     WHERE user_id = $1
     LIMIT 1
     `,
-    [user_id]
+    [
+      user_id,
+      timezone
+    ]
   );
 
   /**
@@ -37,9 +50,18 @@ export const updateStreak = async ({
         last_active,
         start_date
       )
-      VALUES ($1,1,1,CURRENT_DATE,CURRENT_DATE)
+      VALUES (
+        $1,
+        1,
+        1,
+        DATE(NOW() AT TIME ZONE $2),
+        DATE(NOW() AT TIME ZONE $2)
+      )
       `,
-      [user_id]
+      [
+        user_id,
+        timezone
+      ]
     );
 
     return;
@@ -48,15 +70,9 @@ export const updateStreak = async ({
 
   const streak = existing.rows[0];
 
-  const lastActive =
-    new Date(streak.last_active);
-
-  lastActive.setHours(0,0,0,0);
-
   const diffDays =
-    Math.floor(
-      (today.getTime() - lastActive.getTime())
-      / (1000 * 60 * 60 * 24)
+    Number(
+      streak.diff_days ?? 0
     );
 
   let newStreak =
@@ -122,13 +138,15 @@ export const updateStreak = async ({
     SET
       current_streak = $1,
       longest_streak = $2,
-      last_active = CURRENT_DATE,
+      last_active =
+        DATE(NOW() AT TIME ZONE $3),
       updated_at = NOW()
-    WHERE user_id = $3
+    WHERE user_id = $4
     `,
     [
       newStreak,
       newLongest,
+      timezone,
       user_id
     ]
   );
