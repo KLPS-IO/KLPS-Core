@@ -1,4 +1,5 @@
 import { pool } from "../storage/postgres.client";
+import { logger } from "../logging/logger";
 import {
   DEFAULT_TIMEZONE
 } from "./timezone.service";
@@ -14,25 +15,34 @@ export const updateStreak = async ({
   timezone?: string;
 }) => {
 
+  const completedResult = await pool.query(
+    `
+    SELECT COALESCE(MAX(day_number), 1)::int AS computed_streak
+    FROM lema.daily_sessions
+    WHERE
+      user_id = $1
+      AND completion_status = 'completed'
+    `,
+    [user_id]
+  );
+
+  const computedStreak =
+    Number(
+      completedResult.rows[0]
+        ?.computed_streak ?? 1
+    );
+
   const existing = await pool.query(
     `
     SELECT
       current_streak,
       longest_streak,
-      freeze_tokens,
-      last_active,
-      (
-        DATE(NOW() AT TIME ZONE $2)
-        - last_active
-      )::int AS diff_days
+      last_active
     FROM lema.streaks
     WHERE user_id = $1
     LIMIT 1
     `,
-    [
-      user_id,
-      timezone
-    ]
+    [user_id]
   );
 
   /**
@@ -52,14 +62,15 @@ export const updateStreak = async ({
       )
       VALUES (
         $1,
-        1,
-        1,
-        DATE(NOW() AT TIME ZONE $2),
-        DATE(NOW() AT TIME ZONE $2)
+        $2,
+        $2,
+        DATE(NOW() AT TIME ZONE $3),
+        DATE(NOW() AT TIME ZONE $3)
       )
       `,
       [
         user_id,
+        computedStreak,
         timezone
       ]
     );
@@ -70,82 +81,46 @@ export const updateStreak = async ({
 
   const streak = existing.rows[0];
 
-  const diffDays =
+  const existingStreak =
     Number(
-      streak.diff_days ?? 0
+      streak.current_streak ?? 0
     );
 
-  let newStreak =
-    streak.current_streak;
-
-  /**
-   * Same day — do nothing
-   */
-
-  if (diffDays === 0) {
-    return;
-  }
-
-  /**
-   * Next consecutive day
-   */
-
-  if (diffDays === 1) {
-
-    newStreak =
-      streak.current_streak + 1;
-
-  }
-
-  /**
-   * Missed day
-   */
-
-  if (diffDays > 1) {
-
-    if (streak.freeze_tokens > 0) {
-
-      newStreak =
-        streak.current_streak;
-
-      await pool.query(
-        `
-        UPDATE lema.streaks
-        SET
-          freeze_tokens = freeze_tokens - 1
-        WHERE user_id = $1
-        `,
-        [user_id]
-      );
-
-    } else {
-
-      newStreak = 1;
-
-    }
-
-  }
-
-  const newLongest =
+  const nextStreak =
     Math.max(
-      newStreak,
-      streak.longest_streak
+      existingStreak,
+      computedStreak
     );
+
+  if (computedStreak < existingStreak) {
+    logger.warn(
+      `Streak downgrade prevented for user ${user_id}: existing=${existingStreak}, computed=${computedStreak}`
+    );
+  }
+
+  if (
+    Math.abs(nextStreak - existingStreak) > 1
+  ) {
+    logger.warn(
+      `Streak changed by more than 1 for user ${user_id}: previous=${existingStreak}, next=${nextStreak}, computed=${computedStreak}`
+    );
+  }
 
   await pool.query(
     `
     UPDATE lema.streaks
     SET
-      current_streak = $1,
-      longest_streak = $2,
+      current_streak =
+        GREATEST(current_streak, $1),
+      longest_streak =
+        GREATEST(longest_streak, current_streak, $1),
       last_active =
-        DATE(NOW() AT TIME ZONE $3),
+        DATE(NOW() AT TIME ZONE $2),
       updated_at = NOW()
-    WHERE user_id = $4
+    WHERE user_id = $3
     `,
     [
-      newStreak,
-      newLongest,
+      computedStreak,
       timezone,
       user_id
     ]
