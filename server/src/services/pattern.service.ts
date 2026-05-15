@@ -1,5 +1,49 @@
 import { pool } from "../storage/postgres.client";
 
+function normaliseResponseValue(
+  value: unknown
+): string {
+
+  if (typeof value === "string") {
+
+    return value;
+
+  }
+
+  if (Array.isArray(value)) {
+
+    return value
+      .map(normaliseResponseValue)
+      .filter(Boolean)
+      .join(" ");
+
+  }
+
+  if (
+    value &&
+    typeof value === "object"
+  ) {
+
+    return Object.values(value)
+      .map(normaliseResponseValue)
+      .filter(Boolean)
+      .join(" ");
+
+  }
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return "";
+
+  }
+
+  return String(value);
+
+}
+
 export const detectPatterns = async ({
   user_id,
   day_number
@@ -78,7 +122,11 @@ export const detectPatterns = async ({
   for (const row of signals.rows) {
 
     const text =
-      row.response_value.toLowerCase();
+      normaliseResponseValue(
+        row.response_value
+      ).toLowerCase();
+
+    if (!text) continue;
 
     for (const keyword of keywords) {
 

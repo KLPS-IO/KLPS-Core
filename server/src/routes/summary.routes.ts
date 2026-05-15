@@ -261,10 +261,23 @@ router.get("/today", async (req, res) => {
      * STEP 4 — Update streak
      */
 
-    await updateStreak({
-      user_id: userId,
-      timezone
-    });
+    try {
+
+      await updateStreak({
+        user_id: userId,
+        timezone
+      });
+
+    }
+
+    catch (error) {
+
+      console.error(
+        "Streak update failed:",
+        error
+      );
+
+    }
 
     const streakResult =
       await pool.query(
@@ -278,19 +291,35 @@ router.get("/today", async (req, res) => {
       );
 
     const currentStreak =
-      Number(
-        streakResult.rows[0]
-          ?.current_streak ?? 0
+      Math.max(
+        Number(
+          streakResult.rows[0]
+            ?.current_streak ?? 0
+        ),
+        dayNumber
       );
 
     /**
      * STEP 5 — Detect patterns
      */
 
-    await detectPatterns({
-      user_id: userId,
-      day_number: dayNumber
-    });
+    try {
+
+      await detectPatterns({
+        user_id: userId,
+        day_number: dayNumber
+      });
+
+    }
+
+    catch (error) {
+
+      console.error(
+        "Pattern detection failed:",
+        error
+      );
+
+    }
 
     /**
      * STEP 6 — Generate insight
