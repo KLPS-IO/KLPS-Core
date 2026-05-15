@@ -220,7 +220,13 @@ router.get("/today", async (req, res) => {
           q.question_text,
           q.domain,
           q.response_type,
-          q.allow_multiple,
+          (
+            q.allow_multiple
+            OR (
+              q.response_type = 'selection'
+              AND q.domain = 'body'
+            )
+          ) AS allow_multiple,
 
           COALESCE(
             json_agg(
@@ -247,6 +253,8 @@ router.get("/today", async (req, res) => {
         ON
           ro.question_key =
             q.question_key
+          AND q.response_type =
+            'selection'
           AND ro.active = true
 
         WHERE

@@ -1,5 +1,28 @@
 import { pool } from "../storage/postgres.client";
 
+function serialiseResponseValue(
+  value: unknown
+): string {
+
+  if (typeof value === "string") {
+
+    return value;
+
+  }
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return "";
+
+  }
+
+  return JSON.stringify(value);
+
+}
+
 export const saveSignal = async ({
   user_id,
   day_number,
@@ -35,7 +58,9 @@ export const saveSignal = async ({
       user_id,
       day_number,
       question_key,
-      response_value,
+      serialiseResponseValue(
+        response_value
+      ),
       domain
     ]
   );
@@ -48,7 +73,13 @@ export const saveSignal = async ({
       q.question_text,
       q.domain,
       q.response_type,
-      q.allow_multiple,
+      (
+        q.allow_multiple
+        OR (
+          q.response_type = 'selection'
+          AND q.domain = 'body'
+        )
+      ) AS allow_multiple,
 
       COALESCE(
         json_agg(
@@ -65,6 +96,7 @@ export const saveSignal = async ({
 
     LEFT JOIN lema.response_options ro
       ON ro.question_key = q.question_key
+      AND q.response_type = 'selection'
       AND ro.active = true
 
     WHERE
