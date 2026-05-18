@@ -7,6 +7,10 @@ import summaryRoutes from "./routes/summary.routes";
 import sessionRoutes from "./routes/session.routes";
 import founderRoutes from "./routes/founder";
 import dataRoomRoutes from "./routes/data-room.routes";
+import {
+  getSessionUser,
+  hasAcceptedCurrentNda
+} from "./services/data-room.service";
 
 const app = express();
 
@@ -122,6 +126,40 @@ app.use("/api/summary", summaryRoutes);
 app.use("/api/session", sessionRoutes);
 app.use("/api/founder", founderRoutes);
 app.use("/api/data-room", dataRoomRoutes);
+
+app.get("/api/auth/me", async (req, res) => {
+  const session =
+    await getSessionUser(req);
+
+  if (!session) {
+    return res.json({
+      status: "success",
+      authenticated: false,
+      user: null
+    });
+  }
+
+  const nda =
+    await hasAcceptedCurrentNda(session.user.id);
+
+  res.json({
+    status: "success",
+    authenticated: true,
+    user: {
+      id: session.user.id,
+      email: session.user.email,
+      role: session.user.role,
+      is_admin:
+        session.user.role === "founder_admin"
+    },
+    nda: {
+      current_version:
+        nda.nda?.version ?? null,
+      accepted: nda.accepted,
+      accepted_at: nda.acceptedAt ?? null
+    }
+  });
+});
 
 /**
  * Health Check

@@ -61,24 +61,6 @@ const isDocumentAccessLevel = (value: unknown) =>
   value === "authorised_user" ||
   value === "founder_admin";
 
-const requireNdaAccepted = asyncHandler(
-  async (req, res) => {
-    const result =
-      await hasAcceptedCurrentNda(
-        req.dataRoomUser!.id
-      );
-
-    if (!result.accepted) {
-      return res.status(403).json({
-        status: "error",
-        code: "nda_required",
-        message: "Current NDA must be accepted",
-        nda_version: result.nda?.version ?? null
-      });
-    }
-  }
-);
-
 const requireNdaMiddleware = async (
   req: DataRoomRequest,
   res: express.Response,
@@ -99,6 +81,47 @@ const requireNdaMiddleware = async (
   }
 
   next();
+};
+
+const sendSessionResponse = async (
+  req: DataRoomRequest,
+  res: express.Response
+) => {
+  const session =
+    await getSessionUser(req);
+
+  if (!session) {
+    return res.json(
+      jsonOk({
+        authenticated: false,
+        user: null
+      })
+    );
+  }
+
+  const nda =
+    await hasAcceptedCurrentNda(
+      session.user.id
+    );
+
+  return res.json(
+    jsonOk({
+      authenticated: true,
+      user: {
+        id: session.user.id,
+        email: session.user.email,
+        role: session.user.role,
+        is_admin:
+          session.user.role === "founder_admin"
+      },
+      nda: {
+        current_version:
+          nda.nda?.version ?? null,
+        accepted: nda.accepted,
+        accepted_at: nda.acceptedAt ?? null
+      }
+    })
+  );
 };
 
 router.post(
@@ -280,43 +303,17 @@ router.post(
 
 router.get(
   "/session",
-  asyncHandler(async (req, res) => {
-    const session =
-      await getSessionUser(req);
+  asyncHandler(sendSessionResponse)
+);
 
-    if (!session) {
-      return res.json(
-        jsonOk({
-          authenticated: false,
-          user: null
-        })
-      );
-    }
+router.get(
+  "/me",
+  asyncHandler(sendSessionResponse)
+);
 
-    const nda =
-      await hasAcceptedCurrentNda(
-        session.user.id
-      );
-
-    res.json(
-      jsonOk({
-        authenticated: true,
-        user: {
-          id: session.user.id,
-          email: session.user.email,
-          role: session.user.role,
-          is_admin:
-            session.user.role === "founder_admin"
-        },
-        nda: {
-          current_version:
-            nda.nda?.version ?? null,
-          accepted: nda.accepted,
-          accepted_at: nda.acceptedAt ?? null
-        }
-      })
-    );
-  })
+router.get(
+  "/auth/me",
+  asyncHandler(sendSessionResponse)
 );
 
 router.post(
