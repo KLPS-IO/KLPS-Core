@@ -25,6 +25,9 @@ import {
   verifySignedDocumentToken
 } from "../services/data-room.service";
 import { pool } from "../storage/postgres.client";
+import {
+  sendDataRoomOtpEmail
+} from "../services/email.service";
 
 const router = express.Router();
 
@@ -166,14 +169,10 @@ router.post(
       const otp =
         await createLoginOtp(user);
 
-      if (process.env.NODE_ENV !== "production") {
-        console.log(
-          `KLPS data room OTP for ${email}: ${otp.code}`
-        );
-      }
-
-      // Production hook: plug this into Resend/Postmark/SES.
-      // The API response never includes the OTP.
+      await sendDataRoomOtpEmail({
+        email,
+        otpCode: otp.code
+      });
     }
 
     res.json(

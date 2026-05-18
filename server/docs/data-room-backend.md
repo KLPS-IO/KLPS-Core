@@ -9,7 +9,7 @@
 - OTP expiry: `DATA_ROOM_OTP_TTL_MS`, default 10 minutes.
 - Document access: short-lived HMAC signed URLs, default 5 minutes via `DATA_ROOM_SIGNED_URL_TTL_MS`.
 - Private files: store files outside the public web root and set `DATA_ROOM_STORAGE_ROOT`.
-- Email delivery: plug `/auth/request-login` into Resend, Postmark, SES, or similar. The API never returns OTPs.
+- Email delivery: Resend sends OTP codes from `/auth/request-login`. The API never returns OTPs.
 
 ## Environment
 
@@ -21,6 +21,8 @@ DATA_ROOM_SECRET=long-random-secret
 DATA_ROOM_STORAGE_ROOT=/private/klps-data-room
 DATA_ROOM_PUBLIC_API_URL=https://api.klps.co.uk
 FRONTEND_ORIGIN=https://klps.co.uk
+RESEND_API_KEY=re_...
+EMAIL_FROM=KLPS Investor Data Room <investor-access@your-verified-domain.com>
 NODE_ENV=production
 ```
 
@@ -255,7 +257,7 @@ Register document request:
 
 1. Apply `server/sql/20260517_data_room.sql` to production Postgres.
 2. Set production environment variables.
-3. Wire `/auth/request-login` to an email provider.
+3. Configure Resend with `RESEND_API_KEY` and a verified `EMAIL_FROM`.
 4. Store private files under `DATA_ROOM_STORAGE_ROOT`, or replace `resolvePrivateStoragePath` with an S3/Supabase private object adapter.
 5. Update React to call `/api/data-room/session` on load.
 6. Replace localStorage auth with OTP login and cookie credentials.
