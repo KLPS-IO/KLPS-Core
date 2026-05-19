@@ -7,6 +7,7 @@ import {
   createSession,
   createSignedDocumentUrl,
   DataRoomRequest,
+  DataRoomAccessLevel,
   ensureUserForEmail,
   getCurrentNda,
   getIpAddress,
@@ -28,6 +29,13 @@ import { pool } from "../storage/postgres.client";
 import {
   sendDataRoomOtpEmail
 } from "../services/email.service";
+import {
+  createR2PresignedUrl,
+  isR2Configured
+} from "../services/r2.service";
+import {
+  cleanupExpiredDataRoomAuth
+} from "../services/data-room-maintenance.service";
 
 const router = express.Router();
 
@@ -61,8 +69,31 @@ const parsePositiveLimit = (value: unknown) => {
 };
 
 const isDocumentAccessLevel = (value: unknown) =>
-  value === "authorised_user" ||
-  value === "founder_admin";
+  value === "public_light" ||
+  value === "investor_nda" ||
+  value === "advisor_nda" ||
+  value === "founder_only" ||
+  value === "legal_only" ||
+  value === "admin_only";
+
+const normalizeAccessLevel = (
+  value: unknown,
+  fallback: DataRoomAccessLevel
+) =>
+  isDocumentAccessLevel(value)
+    ? value as DataRoomAccessLevel
+    : fallback;
+
+const toStorageKey = (filename: string) => {
+  const safeFilename =
+    filename
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  return `data-room/${Date.now()}-${safeFilename || "document"}`;
+};
 
 const requireNdaMiddleware = async (
   req: DataRoomRequest,
@@ -114,6 +145,7 @@ const sendSessionResponse = async (
         id: session.user.id,
         email: session.user.email,
         role: session.user.role,
+        access_tier: session.user.accessTier,
         is_admin:
           session.user.role === "founder_admin"
       },
@@ -283,6 +315,7 @@ router.post(
           id: user.id,
           email: user.email,
           role: user.role,
+          access_tier: user.accessTier,
           is_admin: user.role === "founder_admin"
         },
         nda: {
@@ -493,6 +526,42 @@ router.post(
 );
 
 router.get(
+  "/categories",
+  requireDataRoomAuth,
+  requireAuthorised,
+  requireNdaMiddleware,
+  asyncHandler(async (req, res) => {
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        label,
+        description,
+        sort_order,
+        minimum_access_level,
+        active
+      FROM data_room.document_categories
+      WHERE active = true
+      ORDER BY sort_order, label
+      `
+    );
+
+    const categories = result.rows.filter(row =>
+      canAccessDocument(
+        req.dataRoomUser!,
+        row.minimum_access_level
+      )
+    );
+
+    res.json(
+      jsonOk({
+        categories
+      })
+    );
+  })
+);
+
+router.get(
   "/documents",
   requireDataRoomAuth,
   requireAuthorised,
@@ -504,16 +573,20 @@ router.get(
         id,
         filename,
         category,
+        description,
         file_size,
         version,
         uploaded_at,
         updated_at,
         access_level,
+        storage_provider,
+        content_type,
+        sort_order,
         watermark_required,
         active
       FROM data_room.documents
       WHERE active = true
-      ORDER BY category, filename
+      ORDER BY category, sort_order, filename
       `
     );
 
@@ -527,6 +600,14 @@ router.get(
     res.json(
       jsonOk({
         documents,
+        access_levels: [
+          "public_light",
+          "investor_nda",
+          "advisor_nda",
+          "founder_only",
+          "legal_only",
+          "admin_only"
+        ],
         watermark_text:
           "Confidential Property of KLPS Ltd"
       })
@@ -626,10 +707,12 @@ router.get(
         d.id,
         d.filename,
         d.storage_path,
+        d.storage_provider,
         d.access_level,
         d.active,
         u.email,
-        u.role
+        u.role,
+        u.access_tier
       FROM data_room.documents d
       CROSS JOIN data_room.users u
       WHERE d.id = $1
@@ -649,7 +732,8 @@ router.get(
         {
           id: userId,
           email: row.email,
-          role: row.role
+          role: row.role,
+          accessTier: row.access_tier
         },
         row.access_level
       )
@@ -666,7 +750,8 @@ router.get(
       user: {
         id: userId,
         email: row.email,
-        role: row.role
+        role: row.role,
+        accessTier: row.access_tier
       },
       eventType:
         action === "download"
@@ -677,6 +762,21 @@ router.get(
         action
       }
     });
+
+    if (row.storage_provider === "r2") {
+      const r2Url =
+        createR2PresignedUrl({
+          method: "GET",
+          objectKey: row.storage_path,
+          expiresSeconds: 60,
+          responseFilename:
+            action === "download"
+              ? row.filename
+              : undefined
+        });
+
+      return res.redirect(302, r2Url);
+    }
 
     const filePath =
       resolvePrivateStoragePath(row.storage_path);
@@ -711,6 +811,7 @@ router.get(
         role,
         authorised_at,
         revoked_at,
+        access_tier,
         created_at,
         updated_at
       FROM data_room.users
@@ -733,6 +834,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const email =
       normalizeEmail(req.body?.email);
+    const accessTier =
+      normalizeAccessLevel(
+        req.body?.access_tier,
+        "investor_nda"
+      );
 
     if (!isValidEmail(email)) {
       return res.status(400).json({
@@ -747,10 +853,11 @@ router.post(
       INSERT INTO data_room.users (
         email,
         role,
+        access_tier,
         authorised_at,
         authorised_by
       )
-      VALUES ($1, 'authorised_user', now(), $2)
+      VALUES ($1, 'authorised_user', $3, now(), $2)
       ON CONFLICT (email)
       DO UPDATE SET
         role = CASE
@@ -758,16 +865,22 @@ router.post(
           THEN 'founder_admin'
           ELSE 'authorised_user'
         END,
+        access_tier = CASE
+          WHEN data_room.users.role = 'founder_admin'
+          THEN 'admin_only'
+          ELSE $3
+        END,
         authorised_at = now(),
         authorised_by = $2,
         revoked_at = NULL,
         revoked_by = NULL,
         updated_at = now()
-      RETURNING id, email, role, authorised_at
+      RETURNING id, email, role, access_tier, authorised_at
       `,
       [
         email,
-        req.dataRoomUser!.id
+        req.dataRoomUser!.id,
+        accessTier
       ]
     );
 
@@ -778,6 +891,8 @@ router.post(
       eventType: "user_authorised",
       metadata: {
         authorised_email: email
+        ,
+        access_tier: accessTier
       }
     });
 
@@ -945,6 +1060,78 @@ router.get(
 );
 
 router.post(
+  "/admin/maintenance/cleanup-auth",
+  requireDataRoomAuth,
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const cleanup =
+      await cleanupExpiredDataRoomAuth();
+
+    res.json(
+      jsonOk({
+        cleanup
+      })
+    );
+  })
+);
+
+router.post(
+  "/admin/documents/upload-url",
+  requireDataRoomAuth,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const filename =
+      typeof req.body?.filename === "string"
+        ? req.body.filename
+        : "";
+    const contentType =
+      typeof req.body?.content_type === "string"
+        ? req.body.content_type
+        : "application/octet-stream";
+
+    if (!filename.trim()) {
+      return res.status(400).json({
+        status: "error",
+        code: "filename_required",
+        message: "filename is required"
+      });
+    }
+
+    if (!isR2Configured()) {
+      return res.status(500).json({
+        status: "error",
+        code: "r2_not_configured",
+        message:
+          "Cloudflare R2 environment variables are not configured"
+      });
+    }
+
+    const storagePath =
+      toStorageKey(filename);
+    const uploadUrl =
+      createR2PresignedUrl({
+        method: "PUT",
+        objectKey: storagePath,
+        expiresSeconds: 300
+      });
+
+    res.json(
+      jsonOk({
+        storage_provider: "r2",
+        storage_path: storagePath,
+        upload_url: uploadUrl,
+        method: "PUT",
+        expires_at:
+          new Date(Date.now() + 300000).toISOString(),
+        headers: {
+          "content-type": contentType
+        }
+      })
+    );
+  })
+);
+
+router.post(
   "/admin/documents",
   requireDataRoomAuth,
   requireAdmin,
@@ -952,12 +1139,25 @@ router.post(
     const {
       filename,
       category,
+      description,
       file_size,
       version,
       storage_path,
+      storage_provider,
+      content_type,
+      sort_order,
       access_level,
       watermark_required
     } = req.body ?? {};
+    const safeAccessLevel =
+      normalizeAccessLevel(
+        access_level,
+        "investor_nda"
+      );
+    const safeStorageProvider =
+      storage_provider === "r2"
+        ? "r2"
+        : "local";
 
     if (
       typeof filename !== "string" ||
@@ -967,6 +1167,11 @@ router.post(
       (
         access_level !== undefined &&
         !isDocumentAccessLevel(access_level)
+      ) ||
+      (
+        storage_provider !== undefined &&
+        storage_provider !== "r2" &&
+        storage_provider !== "local"
       )
     ) {
       return res.status(400).json({
@@ -982,24 +1187,34 @@ router.post(
       INSERT INTO data_room.documents (
         filename,
         category,
+        description,
         file_size,
         version,
         storage_path,
+        storage_provider,
+        content_type,
+        sort_order,
         access_level,
         watermark_required
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
       `,
       [
         filename.trim(),
         category.trim(),
+        typeof description === "string"
+          ? description.trim()
+          : null,
         Number(file_size ?? 0),
         version.trim(),
         storage_path.trim(),
-        isDocumentAccessLevel(access_level)
-          ? access_level
-          : "authorised_user",
+        safeStorageProvider,
+        typeof content_type === "string"
+          ? content_type
+          : null,
+        Number(sort_order ?? 0),
+        safeAccessLevel,
         watermark_required !== false
       ]
     );
@@ -1020,9 +1235,13 @@ router.patch(
     const allowed = [
       "filename",
       "category",
+      "description",
       "file_size",
       "version",
       "storage_path",
+      "storage_provider",
+      "content_type",
+      "sort_order",
       "access_level",
       "watermark_required",
       "active"
@@ -1046,7 +1265,23 @@ router.patch(
         status: "error",
         code: "invalid_access_level",
         message:
-          "access_level must be authorised_user or founder_admin"
+          "access_level must be a valid data room access level"
+      });
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        req.body ?? {},
+        "storage_provider"
+      ) &&
+      req.body.storage_provider !== "r2" &&
+      req.body.storage_provider !== "local"
+    ) {
+      return res.status(400).json({
+        status: "error",
+        code: "invalid_storage_provider",
+        message:
+          "storage_provider must be local or r2"
       });
     }
 

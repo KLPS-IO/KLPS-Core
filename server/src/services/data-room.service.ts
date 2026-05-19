@@ -32,10 +32,19 @@ export type DataRoomRole =
   | "pending_user"
   | "revoked_user";
 
+export type DataRoomAccessLevel =
+  | "public_light"
+  | "investor_nda"
+  | "advisor_nda"
+  | "founder_only"
+  | "legal_only"
+  | "admin_only";
+
 export type DataRoomUser = {
   id: string;
   email: string;
   role: DataRoomRole;
+  accessTier: DataRoomAccessLevel;
 };
 
 export type DataRoomRequest =
@@ -153,17 +162,23 @@ export const ensureUserForEmail = async (
     isFounder(email)
       ? "founder_admin"
       : "pending_user";
+  const accessTier: DataRoomAccessLevel =
+    role === "founder_admin"
+      ? "admin_only"
+      : "investor_nda";
 
   const result = await pool.query(
     `
     INSERT INTO data_room.users (
       email,
       role,
+      access_tier,
       authorised_at
     )
     VALUES (
       $1,
       $2,
+      $4,
       CASE WHEN $2 = 'founder_admin' THEN now() ELSE NULL END
     )
     ON CONFLICT (email)
@@ -179,21 +194,33 @@ export const ensureUserForEmail = async (
         THEN COALESCE(data_room.users.authorised_at, now())
         ELSE data_room.users.authorised_at
       END,
+      access_tier = CASE
+        WHEN $1 = $3 THEN 'admin_only'
+        ELSE data_room.users.access_tier
+      END,
       revoked_at = CASE
         WHEN $1 = $3 THEN NULL
         ELSE data_room.users.revoked_at
       END,
       updated_at = now()
-    RETURNING id, email, role
+    RETURNING id, email, role, access_tier
     `,
     [
       email,
       role,
-      FOUNDER_EMAIL
+      FOUNDER_EMAIL,
+      accessTier
     ]
   );
 
-  return result.rows[0] as DataRoomUser;
+  const row = result.rows[0];
+
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    accessTier: row.access_tier
+  } as DataRoomUser;
 };
 
 export const logAccessEvent = async ({
@@ -280,7 +307,8 @@ export const verifyLoginOtp = async (
       o.otp_hash,
       u.id AS user_id,
       u.email,
-      u.role
+      u.role,
+      u.access_tier
     FROM data_room.login_otps o
     JOIN data_room.users u
       ON u.id = o.user_id
@@ -316,7 +344,8 @@ export const verifyLoginOtp = async (
   return {
     id: row.user_id,
     email: row.email,
-    role: row.role
+    role: row.role,
+    accessTier: row.access_tier
   } as DataRoomUser;
 };
 
@@ -374,7 +403,8 @@ export const getSessionUser = async (
       s.id AS session_id,
       u.id,
       u.email,
-      u.role
+      u.role,
+      u.access_tier
     FROM data_room.sessions s
     JOIN data_room.users u
       ON u.id = s.user_id
@@ -399,7 +429,8 @@ export const getSessionUser = async (
     user: {
       id: row.id,
       email: row.email,
-      role: row.role
+      role: row.role,
+      accessTier: row.access_tier
     } as DataRoomUser
   };
 };
@@ -525,7 +556,38 @@ export const canAccessDocument = (
   if (user.role === "founder_admin") return true;
   if (user.role !== "authorised_user") return false;
 
-  return documentAccessLevel === "authorised_user";
+  const hierarchy: DataRoomAccessLevel[] = [
+    "public_light",
+    "investor_nda",
+    "advisor_nda",
+    "founder_only",
+    "legal_only",
+    "admin_only"
+  ];
+
+  const documentIndex =
+    hierarchy.indexOf(
+      documentAccessLevel as DataRoomAccessLevel
+    );
+  const userIndex =
+    hierarchy.indexOf(user.accessTier);
+
+  if (documentIndex === -1 || userIndex === -1) {
+    return false;
+  }
+
+  if (
+    documentAccessLevel === "founder_only" ||
+    documentAccessLevel === "admin_only"
+  ) {
+    return false;
+  }
+
+  if (documentAccessLevel === "legal_only") {
+    return user.accessTier === "legal_only";
+  }
+
+  return userIndex >= documentIndex;
 };
 
 export const createSignedDocumentUrl = ({

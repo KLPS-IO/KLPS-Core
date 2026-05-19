@@ -23,7 +23,9 @@
     "build": "tsc",
     "start": "node server/dist/index.js",
     "lint": "echo 'Add ESLint later'",
-    "test": "node --test -r ts-node/register server/src/services/*.test.ts"
+    "test": "node --test -r ts-node/register server/src/services/*.test.ts",
+    "backup:data-room": "bash scripts/backup-data-room-db.sh",
+    "restore:data-room": "bash scripts/restore-data-room-db.sh"
   },
   "repository": {
     "type": "git",

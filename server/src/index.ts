@@ -11,6 +11,7 @@ import {
   getSessionUser,
   hasAcceptedCurrentNda
 } from "./services/data-room.service";
+import { pool } from "./storage/postgres.client";
 
 const app = express();
 
@@ -149,6 +150,7 @@ app.get("/api/auth/me", async (req, res) => {
       id: session.user.id,
       email: session.user.email,
       role: session.user.role,
+      access_tier: session.user.accessTier,
       is_admin:
         session.user.role === "founder_admin"
     },
@@ -171,6 +173,31 @@ app.get("/", (req, res) => {
     status: "LEMA API running"
   });
 
+});
+
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    service: "LEMA API"
+  });
+});
+
+app.get("/ready", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+
+    res.json({
+      status: "ready",
+      database: "ok"
+    });
+  } catch (error) {
+    console.error("readiness check failed:", error);
+
+    res.status(503).json({
+      status: "not_ready",
+      database: "error"
+    });
+  }
 });
 
 /**
