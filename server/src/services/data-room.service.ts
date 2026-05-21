@@ -129,7 +129,7 @@ export const setSessionCookie = (
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     "HttpOnly",
     "Path=/",
-    "SameSite=Lax",
+    "SameSite=None",
     `Expires=${expiresAt.toUTCString()}`
   ];
 
