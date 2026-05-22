@@ -781,8 +781,9 @@ router.get(
               ? row.filename
               : undefined
         });
-
+      console.log("R2 URL:", r2Url);
       return res.redirect(302, r2Url);
+      
     }
 
     const filePath =
