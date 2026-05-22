@@ -159,6 +159,11 @@ export const createR2PresignedUrl = ({
       dateStamp
     );
 
+    console.log("R2 ENDPOINT:", config.endpoint);
+    console.log("BUCKET:", config.bucket);
+    console.log("OBJECT KEY:", objectKey);
+    console.log("CANONICAL URI:", canonicalUri);
+
   const signature =
     crypto
       .createHmac("sha256", signingKey)
