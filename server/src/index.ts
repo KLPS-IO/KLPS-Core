@@ -12,7 +12,8 @@ import {
   hasAcceptedCurrentNda
 } from "./services/data-room.service";
 import { pool } from "./storage/postgres.client";
-
+import researchRoutes
+  from "./routes/research.routes";
 const app = express();
 
 app.set("trust proxy", 1);
@@ -127,6 +128,7 @@ app.use("/api/summary", summaryRoutes);
 app.use("/api/session", sessionRoutes);
 app.use("/api/founder", founderRoutes);
 app.use("/api/data-room", dataRoomRoutes);
+app.use("/api/research", researchRoutes);
 
 app.get("/api/auth/me", async (req, res) => {
   const session =
@@ -208,7 +210,7 @@ const PORT =
   process.env.PORT || 5001;
 
 app.listen(PORT, () => {
-
+  
   console.log(
     `LEMA running on port ${PORT}`
   );
