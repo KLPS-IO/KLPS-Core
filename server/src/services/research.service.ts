@@ -18,6 +18,25 @@ export type ResearchSubmission = {
   frequency: string | null;
   currentSolutions: unknown;
 
+  ageRange?: string;
+  employmentStatus?: string;
+  occupation?: string;
+  lifeStage?: string;
+  incomeBand?: string;
+
+  challengeFrequency?: string;
+  confidenceLevel?: number;
+
+  spentMoney?: string;
+  spentMoneyOn?: string[];
+
+  wouldUse?: string;
+  wouldPay?: string;
+  monthlyPrice?: string;
+
+  desiredInsights?: string[];
+  otherInsight?: string;
+
   recordings: VoiceRecordingInput[];
 };
 
