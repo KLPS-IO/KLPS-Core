@@ -8,14 +8,48 @@ const upload = multer({
   storage: multer.memoryStorage()
 });
 
+const voiceUpload = upload.fields([
+  {
+    name: "voice_0",
+    maxCount: 1
+  },
+  {
+    name: "voice_1",
+    maxCount: 1
+  },
+  {
+    name: "voice_2",
+    maxCount: 1
+  },
+  {
+    name: "voice_3",
+    maxCount: 1
+  }
+]);
+
 router.post(
   "/",
-  upload.any(),
+  voiceUpload,
   async (req, res) => {
     try {
+      const filesByField =
+        (req.files ?? {}) as Partial<
+          Record<
+            | "voice_0"
+            | "voice_1"
+            | "voice_2"
+            | "voice_3",
+            Express.Multer.File[]
+          >
+        >;
+
       const files =
-        (req.files as Express.Multer.File[]) ??
-        [];
+        [
+          ...(filesByField.voice_0 ?? []),
+          ...(filesByField.voice_1 ?? []),
+          ...(filesByField.voice_2 ?? []),
+          ...(filesByField.voice_3 ?? [])
+        ];
 
       if (files.length === 0) {
         return res.status(400).json({
@@ -24,28 +58,36 @@ router.post(
         });
       }
 
-      const firstFile =
-        files[0];
+      const objectKeys =
+        await Promise.all(
+          files.map(async file => {
+            const objectKey =
+              `test/${Date.now()}-${file.originalname}`;
 
-      const objectKey =
-        `test/${Date.now()}-${firstFile.originalname}`;
+            console.log(
+              "UPLOADING:",
+              objectKey
+            );
 
-        console.log(
-  "UPLOADING:",
-  objectKey
-);
-      await uploadToR2(
-        objectKey,
-        firstFile.buffer,
-        firstFile.mimetype
-      );
-      console.log(
-  "UPLOAD COMPLETE"
-);
+            await uploadToR2(
+              objectKey,
+              file.buffer,
+              file.mimetype
+            );
+
+            console.log(
+              "UPLOAD COMPLETE"
+            );
+
+            return objectKey;
+          })
+        );
 
       return res.json({
         success: true,
-        objectKey
+        objectKey:
+          objectKeys[0],
+        objectKeys
       });
     }
     catch (error) {
