@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { pool } from "../storage/postgres.client";
+import type { PoolClient } from "pg";
 
 export type VoiceRecordingInput = {
   questionKey: string;
@@ -36,87 +37,204 @@ export type ResearchSubmission = {
 
   desiredInsights?: string[];
   otherInsight?: string;
+  trustedSource?: string;
 
   recordings: VoiceRecordingInput[];
+};
+
+const researchLog = (
+  event: string,
+  details: Record<string, unknown> = {}
+) => {
+  console.log(
+    JSON.stringify({
+      event,
+      ...details
+    })
+  );
 };
 
 export async function submitResearchResponse(
   data: ResearchSubmission
 ) {
+  const client =
+    await pool.connect();
+
   const participantId =
     crypto.randomUUID();
 
   const surveyResponseId =
     crypto.randomUUID();
 
-  await pool.query(
-    `
-    INSERT INTO participants (
-      id,
-      full_name,
-      email,
-      consent
-    )
-    VALUES ($1,$2,$3,$4)
-    `,
-    [
-      participantId,
-      data.fullName,
-      data.email,
-      data.consent
-    ]
-  );
+  try {
+    await client.query("BEGIN");
 
-  await pool.query(
-    `
-    INSERT INTO survey_responses (
-      id,
-      participant_id,
-      body_areas,
-      concerns,
-      frequency,
-      current_solutions
-    )
-    VALUES ($1,$2,$3,$4,$5,$6)
-    `,
-    [
-      surveyResponseId,
-      participantId,
-      JSON.stringify(data.bodyAreas),
-      JSON.stringify(data.concerns),
-      data.frequency,
-      JSON.stringify(
-        data.currentSolutions
-      )
-    ]
-  );
+    researchLog(
+      "PARTICIPANT_INSERT_STARTED",
+      { participantId }
+    );
 
-  for (const recording of data.recordings) {
-    await pool.query(
+    await client.query(
       `
-      INSERT INTO voice_recordings (
+      INSERT INTO participants (
+        id,
+        full_name,
+        email,
+        consent
+      )
+      VALUES ($1,$2,$3,$4)
+      `,
+      [
+        participantId,
+        data.fullName,
+        data.email,
+        data.consent
+      ]
+    );
+
+    researchLog(
+      "PARTICIPANT_INSERT_COMPLETE",
+      { participantId }
+    );
+
+    researchLog(
+      "SURVEY_INSERT_STARTED",
+      {
+        participantId,
+        surveyResponseId
+      }
+    );
+
+    await client.query(
+      `
+      INSERT INTO survey_responses (
         id,
         participant_id,
-        survey_response_id,
-        question_key,
-        question_text,
-        duration_seconds,
-        r2_object_key
+        body_areas,
+        concerns,
+        frequency,
+        current_solutions,
+        age_range,
+        employment_status,
+        occupation,
+        life_stage,
+        income_band,
+        challenge_frequency,
+        confidence_level,
+        spent_money,
+        spent_money_on,
+        would_use,
+        would_pay,
+        monthly_price,
+        desired_insights,
+        other_insight,
+        trusted_source
       )
       VALUES (
-        $1,$2,$3,$4,$5,$6,$7
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+        $12,$13,$14,$15,$16,$17,$18,$19,$20,$21
       )
       `,
       [
-        crypto.randomUUID(),
-        participantId,
         surveyResponseId,
-        recording.questionKey,
-        recording.questionText,
-        recording.durationSeconds,
-        recording.r2ObjectKey
+        participantId,
+        JSON.stringify(data.bodyAreas),
+        JSON.stringify(data.concerns),
+        data.frequency,
+        JSON.stringify(
+          data.currentSolutions
+        ),
+        data.ageRange ?? null,
+        data.employmentStatus ?? null,
+        data.occupation ?? null,
+        data.lifeStage ?? null,
+        data.incomeBand ?? null,
+        data.challengeFrequency ?? null,
+        data.confidenceLevel ?? null,
+        data.spentMoney ?? null,
+        JSON.stringify(
+          data.spentMoneyOn ?? []
+        ),
+        data.wouldUse ?? null,
+        data.wouldPay ?? null,
+        data.monthlyPrice ?? null,
+        JSON.stringify(
+          data.desiredInsights ?? []
+        ),
+        data.otherInsight ?? null,
+        data.trustedSource ?? null
       ]
     );
+
+    researchLog(
+      "SURVEY_INSERT_COMPLETE",
+      {
+        participantId,
+        surveyResponseId
+      }
+    );
+
+    for (const recording of data.recordings) {
+      const voiceRecordingId =
+        crypto.randomUUID();
+
+      researchLog(
+        "VOICE_RECORDING_INSERT_STARTED",
+        {
+          participantId,
+          surveyResponseId,
+          voiceRecordingId,
+          questionKey:
+            recording.questionKey
+        }
+      );
+
+      await client.query(
+        `
+        INSERT INTO voice_recordings (
+          id,
+          participant_id,
+          survey_response_id,
+          question_key,
+          question_text,
+          duration_seconds,
+          r2_object_key
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7
+        )
+        `,
+        [
+          voiceRecordingId,
+          participantId,
+          surveyResponseId,
+          recording.questionKey,
+          recording.questionText,
+          recording.durationSeconds,
+          recording.r2ObjectKey
+        ]
+      );
+
+      researchLog(
+        "VOICE_RECORDING_INSERT_COMPLETE",
+        {
+          participantId,
+          surveyResponseId,
+          voiceRecordingId,
+          questionKey:
+            recording.questionKey
+        }
+      );
+    }
+
+    await client.query("COMMIT");
+  }
+  catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  }
+  finally {
+    client.release();
   }
 
   return {
@@ -124,3 +242,22 @@ export async function submitResearchResponse(
     surveyResponseId
   };
 }
+
+const rollbackQuietly = async (
+  client: PoolClient
+) => {
+  try {
+    await client.query("ROLLBACK");
+  }
+  catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "RESEARCH_ROLLBACK_FAILED",
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      })
+    );
+  }
+};
