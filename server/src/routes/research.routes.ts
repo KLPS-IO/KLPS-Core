@@ -141,7 +141,7 @@ router.post("/", voiceUpload, async (req, res) => {
     }
 
     const uploadedFiles = await Promise.all(
-      files.map(async (file) => {
+      (files ?? []).map(async (file) => {
         const objectKey = `test/${Date.now()}-${file.originalname}`;
 
         researchLog("R2_UPLOAD_STARTED", {
@@ -209,9 +209,9 @@ router.post("/", voiceUpload, async (req, res) => {
       success: true,
       participantId: submission.participantId,
       surveyResponseId: submission.surveyResponseId,
-      objectKey: objectKeys[0],
+      objectKey: objectKeys[0] ?? null,
       objectKeys,
-    });
+});
   } catch (error) {
     console.error(
       JSON.stringify({
