@@ -16,8 +16,8 @@ export type ResearchSubmission = {
 
   bodyAreas: unknown;
   concerns: unknown;
-  frequency: string | null;
-  currentSolutions: unknown;
+  frequency: string[] | null;
+  currentSolutions: unknown[];
 
   ageRange?: string;
   employmentStatus?: string;
@@ -42,6 +42,19 @@ export type ResearchSubmission = {
   recordings: VoiceRecordingInput[];
 };
 
+const isBodyAreaObject = (
+  value: unknown
+): value is Record<
+  string,
+  {
+    concerns?: string[];
+    frequency?: string[];
+  }
+> =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value);
+  
 const researchLog = (
   event: string,
   details: Record<string, unknown> = {}
@@ -105,6 +118,50 @@ export async function submitResearchResponse(
       }
     );
 
+    let bodyAreas =
+  data.bodyAreas;
+
+let concerns =
+  data.concerns;
+
+let bodyAreaResponses =
+  null;
+
+if (
+  isBodyAreaObject(
+    data.bodyAreas
+  )
+) {
+  bodyAreaResponses =
+    data.bodyAreas;
+
+  bodyAreas =
+    Object.keys(
+      data.bodyAreas
+    );
+
+  concerns =
+    Object.fromEntries(
+      Object.entries(
+        data.bodyAreas
+      ).map(
+        ([area, value]) => [
+          area,
+          value.concerns ?? []
+        ]
+      )
+    );
+}
+
+researchLog(
+  "BODY_AREA_NORMALIZED",
+  {
+    bodyAreas,
+    concerns,
+    bodyAreaResponses
+  }
+);
+
     await client.query(
       `
       INSERT INTO survey_responses (
@@ -128,18 +185,20 @@ export async function submitResearchResponse(
         monthly_price,
         desired_insights,
         other_insight,
-        trusted_source
-      )
+        trusted_source,
+        body_area_responses
+              )
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
-        $12,$13,$14,$15,$16,$17,$18,$19,$20,$21
+        $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+        $22
       )
       `,
       [
         surveyResponseId,
         participantId,
-        JSON.stringify(data.bodyAreas),
-        JSON.stringify(data.concerns),
+        JSON.stringify(bodyAreas),
+        JSON.stringify(concerns),
         data.frequency,
         JSON.stringify(
           data.currentSolutions
@@ -162,7 +221,10 @@ export async function submitResearchResponse(
           data.desiredInsights ?? []
         ),
         data.otherInsight ?? null,
-        data.trustedSource ?? null
+        data.trustedSource ?? null,
+        JSON.stringify(
+  bodyAreaResponses
+)
       ]
     );
 
