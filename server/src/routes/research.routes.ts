@@ -133,13 +133,6 @@ router.post("/", voiceUpload, async (req, res) => {
       ...(filesByField.voice_3 ?? []),
     ];
 
-    if (files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "No files received",
-      });
-    }
-
     const uploadedFiles = await Promise.all(
       (files ?? []).map(async (file) => {
         const objectKey = `test/${Date.now()}-${file.originalname}`;
