@@ -37,55 +37,40 @@ export type ResearchSubmission = {
 
   desiredInsights?: string[];
   otherInsight?: string;
-  trustedSource?: string;
-
+  trustedSource?: string[];
   recordings: VoiceRecordingInput[];
 };
 
 const isBodyAreaObject = (
-  value: unknown
+  value: unknown,
 ): value is Record<
   string,
   {
     concerns?: string[];
     frequency?: string[];
   }
-> =>
-  typeof value === "object" &&
-  value !== null &&
-  !Array.isArray(value);
-  
-const researchLog = (
-  event: string,
-  details: Record<string, unknown> = {}
-) => {
+> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+const researchLog = (event: string, details: Record<string, unknown> = {}) => {
   console.log(
     JSON.stringify({
       event,
-      ...details
-    })
+      ...details,
+    }),
   );
 };
 
-export async function submitResearchResponse(
-  data: ResearchSubmission
-) {
-  const client =
-    await pool.connect();
+export async function submitResearchResponse(data: ResearchSubmission) {
+  const client = await pool.connect();
 
-  const participantId =
-    crypto.randomUUID();
+  const participantId = crypto.randomUUID();
 
-  const surveyResponseId =
-    crypto.randomUUID();
+  const surveyResponseId = crypto.randomUUID();
 
   try {
     await client.query("BEGIN");
 
-    researchLog(
-      "PARTICIPANT_INSERT_STARTED",
-      { participantId }
-    );
+    researchLog("PARTICIPANT_INSERT_STARTED", { participantId });
 
     await client.query(
       `
@@ -97,70 +82,40 @@ export async function submitResearchResponse(
       )
       VALUES ($1,$2,$3,$4)
       `,
-      [
-        participantId,
-        data.fullName,
-        data.email,
-        data.consent
-      ]
+      [participantId, data.fullName, data.email, data.consent],
     );
 
-    researchLog(
-      "PARTICIPANT_INSERT_COMPLETE",
-      { participantId }
-    );
+    researchLog("PARTICIPANT_INSERT_COMPLETE", { participantId });
 
-    researchLog(
-      "SURVEY_INSERT_STARTED",
-      {
-        participantId,
-        surveyResponseId
-      }
-    );
+    researchLog("SURVEY_INSERT_STARTED", {
+      participantId,
+      surveyResponseId,
+    });
 
-    let bodyAreas =
-  data.bodyAreas;
+    let bodyAreas = data.bodyAreas;
 
-let concerns =
-  data.concerns;
+    let concerns = data.concerns;
 
-let bodyAreaResponses =
-  null;
+    let bodyAreaResponses = null;
 
-if (
-  isBodyAreaObject(
-    data.bodyAreas
-  )
-) {
-  bodyAreaResponses =
-    data.bodyAreas;
+    if (isBodyAreaObject(data.bodyAreas)) {
+      bodyAreaResponses = data.bodyAreas;
 
-  bodyAreas =
-    Object.keys(
-      data.bodyAreas
-    );
+      bodyAreas = Object.keys(data.bodyAreas);
 
-  concerns =
-    Object.fromEntries(
-      Object.entries(
-        data.bodyAreas
-      ).map(
-        ([area, value]) => [
+      concerns = Object.fromEntries(
+        Object.entries(data.bodyAreas).map(([area, value]) => [
           area,
-          value.concerns ?? []
-        ]
-      )
-    );
-}
+          value.concerns ?? [],
+        ]),
+      );
+    }
 
-researchLog(
-  "BODY_AREA_NORMALIZED",
-  {
-    bodyAreas,
-    concerns,
-    bodyAreaResponses
-  }
-);
+    researchLog("BODY_AREA_NORMALIZED", {
+      bodyAreas,
+      concerns,
+      bodyAreaResponses,
+    });
 
     await client.query(
       `
@@ -200,9 +155,7 @@ researchLog(
         JSON.stringify(bodyAreas),
         JSON.stringify(concerns),
         data.frequency,
-        JSON.stringify(
-          data.currentSolutions
-        ),
+        JSON.stringify(data.currentSolutions),
         data.ageRange ?? null,
         data.employmentStatus ?? null,
         data.occupation ?? null,
@@ -211,45 +164,31 @@ researchLog(
         data.challengeFrequency ?? null,
         data.confidenceLevel ?? null,
         data.spentMoney ?? null,
-        JSON.stringify(
-          data.spentMoneyOn ?? []
-        ),
+        JSON.stringify(data.spentMoneyOn ?? []),
         data.wouldUse ?? null,
         data.wouldPay ?? null,
         data.monthlyPrice ?? null,
-        JSON.stringify(
-          data.desiredInsights ?? []
-        ),
+        JSON.stringify(data.desiredInsights ?? []),
         data.otherInsight ?? null,
-        data.trustedSource ?? null,
-        JSON.stringify(
-  bodyAreaResponses
-)
-      ]
+        JSON.stringify(data.trustedSource ?? []),
+        JSON.stringify(bodyAreaResponses),
+      ],
     );
 
-    researchLog(
-      "SURVEY_INSERT_COMPLETE",
-      {
-        participantId,
-        surveyResponseId
-      }
-    );
+    researchLog("SURVEY_INSERT_COMPLETE", {
+      participantId,
+      surveyResponseId,
+    });
 
     for (const recording of data.recordings) {
-      const voiceRecordingId =
-        crypto.randomUUID();
+      const voiceRecordingId = crypto.randomUUID();
 
-      researchLog(
-        "VOICE_RECORDING_INSERT_STARTED",
-        {
-          participantId,
-          surveyResponseId,
-          voiceRecordingId,
-          questionKey:
-            recording.questionKey
-        }
-      );
+      researchLog("VOICE_RECORDING_INSERT_STARTED", {
+        participantId,
+        surveyResponseId,
+        voiceRecordingId,
+        questionKey: recording.questionKey,
+      });
 
       await client.query(
         `
@@ -273,53 +212,41 @@ researchLog(
           recording.questionKey,
           recording.questionText,
           recording.durationSeconds,
-          recording.r2ObjectKey
-        ]
+          recording.r2ObjectKey,
+        ],
       );
 
-      researchLog(
-        "VOICE_RECORDING_INSERT_COMPLETE",
-        {
-          participantId,
-          surveyResponseId,
-          voiceRecordingId,
-          questionKey:
-            recording.questionKey
-        }
-      );
+      researchLog("VOICE_RECORDING_INSERT_COMPLETE", {
+        participantId,
+        surveyResponseId,
+        voiceRecordingId,
+        questionKey: recording.questionKey,
+      });
     }
 
     await client.query("COMMIT");
-  }
-  catch (error) {
+  } catch (error) {
     await rollbackQuietly(client);
     throw error;
-  }
-  finally {
+  } finally {
     client.release();
   }
 
   return {
     participantId,
-    surveyResponseId
+    surveyResponseId,
   };
 }
 
-const rollbackQuietly = async (
-  client: PoolClient
-) => {
+const rollbackQuietly = async (client: PoolClient) => {
   try {
     await client.query("ROLLBACK");
-  }
-  catch (error) {
+  } catch (error) {
     console.error(
       JSON.stringify({
         event: "RESEARCH_ROLLBACK_FAILED",
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error)
-      })
+        error: error instanceof Error ? error.message : String(error),
+      }),
     );
   }
 };
