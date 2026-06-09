@@ -169,8 +169,7 @@ router.post("/", voiceUpload, async (req, res) => {
       fullName: asString(payload.fullName),
       email: asString(payload.email).toLowerCase(),
       consent: asBoolean(payload.consent),
-      bodyAreas:
-        payload.bodyAreas ?? {},
+      bodyAreas: payload.bodyAreas ?? {},
       concerns: payload.concerns ?? {},
       frequency: null,
       currentSolutions: asStringArray(payload.currentSolutions),
@@ -188,8 +187,9 @@ router.post("/", voiceUpload, async (req, res) => {
       monthlyPrice: asString(payload.monthlyPrice) || undefined,
       desiredInsights: asStringArray(payload.desiredInsights),
       otherInsight: asString(payload.otherInsight) || undefined,
-      trustedSource:
-        asString(payload.trustedSource ?? payload.trusted_source) || undefined,
+      trustedSource: asStringArray(
+        payload.trustedSource ?? payload.trusted_source,
+      ),
       recordings: uploadedFiles.map((uploadedFile) =>
         toRecordingInput(payload, uploadedFile),
       ),
