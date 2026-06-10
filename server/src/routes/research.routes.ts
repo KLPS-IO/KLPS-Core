@@ -263,32 +263,12 @@ router.get("/metrics", async (_req, res) => {
             COUNT(*)::int AS participants
           FROM participants
         ),
-        concern_values AS (
-          SELECT
-            concern
-          FROM survey_responses
-          CROSS JOIN LATERAL jsonb_each(
-            CASE
-              WHEN jsonb_typeof(concerns) = 'object'
-              THEN concerns
-              ELSE '{}'::jsonb
-            END
-          ) AS concern_groups(area, values_json)
-          CROSS JOIN LATERAL jsonb_array_elements_text(
-            CASE
-              WHEN jsonb_typeof(values_json) = 'array'
-              THEN values_json
-              ELSE '[]'::jsonb
-            END
-          ) AS concern
-        ),
         top_concern AS (
           SELECT
             concern,
-            COUNT(*)::int AS count
-          FROM concern_values
-          GROUP BY concern
-          ORDER BY count DESC, concern ASC
+            response_count AS count
+          FROM research_concern_counts
+          ORDER BY response_count DESC, concern ASC
           LIMIT 1
         ),
         desired_insight_values AS (
@@ -367,9 +347,16 @@ router.get("/metrics", async (_req, res) => {
         ORDER BY count DESC
         LIMIT 1
       )
-        SELECT
+      SELECT
           totals.participants,
+
+          (
+            SELECT COUNT(*)::int
+            FROM voice_recordings
+          ) AS "voiceRecordings",
+
           top_concern.concern AS "topConcern",
+
           CASE
             WHEN totals.participants = 0
             THEN 0
@@ -386,20 +373,6 @@ router.get("/metrics", async (_req, res) => {
                 WHERE LOWER(
                   COALESCE(
                     survey_responses.spent_money,
-                    ''
-                  )
-                ) IN ('yes', 'true', 'y')
-              ) * 100.0 / totals.participants
-            )::int
-          END AS "spentMoneyPercent",
-          CASE
-            WHEN totals.participants = 0
-            THEN 0
-            ELSE ROUND(
-              COUNT(*) FILTER (
-                WHERE LOWER(
-                  COALESCE(
-                    survey_responses.would_pay,
                     ''
                   )
                 ) IN ('yes', 'true', 'y')
@@ -440,8 +413,6 @@ router.get("/metrics", async (_req, res) => {
           top_price_point.count
         `,
     );
-
-    console.log("METRICS RESULT", JSON.stringify(result.rows[0], null, 2));
 
     return res.json(
       result.rows[0] ?? {
