@@ -351,7 +351,7 @@ router.get("/metrics", async (_req, res) => {
           totals.participants,
 
           (
-            SELECT COUNT(*)::int
+            SELECT COUNT(DISTINCT participant_id)::int
             FROM voice_recordings
           ) AS "voiceRecordings",
 
