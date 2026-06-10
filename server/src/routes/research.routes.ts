@@ -3,6 +3,7 @@ import multer from "multer";
 import { uploadToR2 } from "../services/r2.service";
 import { submitResearchResponse } from "../services/research.service";
 import { pool } from "../storage/postgres.client";
+import crypto from "crypto";
 const router = Router();
 
 const upload = multer({
@@ -122,6 +123,8 @@ router.post("/", voiceUpload, async (req, res) => {
 
     const payload = parsePayload(req.body?.payload);
 
+    const participantId = crypto.randomUUID();
+
     const filesByField = (req.files ?? {}) as Partial<
       Record<VoiceField, Express.Multer.File[]>
     >;
@@ -135,8 +138,7 @@ router.post("/", voiceUpload, async (req, res) => {
 
     const uploadedFiles = await Promise.all(
       (files ?? []).map(async (file) => {
-        const objectKey = `test/${Date.now()}-${file.originalname}`;
-
+        const objectKey = `research/survey-responses/${participantId}/${Date.now()}-${file.originalname}`;
         researchLog("R2_UPLOAD_STARTED", {
           fieldname: file.fieldname,
           originalname: file.originalname,
@@ -158,35 +160,38 @@ router.post("/", voiceUpload, async (req, res) => {
       }),
     );
 
-    const submission = await submitResearchResponse({
-      fullName: asString(payload.fullName),
-      email: asString(payload.email).toLowerCase(),
-      consent: asBoolean(payload.consent),
-      bodyAreas: payload.bodyAreas ?? {},
-      concerns: payload.concerns ?? {},
-      frequency: null,
-      currentSolutions: asStringArray(payload.currentSolutions),
-      ageRange: asString(payload.ageRange) || undefined,
-      employmentStatus: asString(payload.employmentStatus) || undefined,
-      occupation: asString(payload.occupation) || undefined,
-      lifeStage: asString(payload.lifeStage) || undefined,
-      incomeBand: asString(payload.incomeBand) || undefined,
-      challengeFrequency: asString(payload.challengeFrequency) || undefined,
-      confidenceLevel: asOptionalNumber(payload.confidenceLevel),
-      spentMoney: asString(payload.spentMoney) || undefined,
-      spentMoneyOn: asStringArray(payload.spentMoneyOn),
-      wouldUse: asString(payload.wouldUse) || undefined,
-      wouldPay: asString(payload.wouldPay) || undefined,
-      monthlyPrice: asString(payload.monthlyPrice) || undefined,
-      desiredInsights: asStringArray(payload.desiredInsights),
-      otherInsight: asString(payload.otherInsight) || undefined,
-      trustedSource: asStringArray(
-        payload.trustedSource ?? payload.trusted_source,
-      ),
-      recordings: uploadedFiles.map((uploadedFile) =>
-        toRecordingInput(payload, uploadedFile),
-      ),
-    });
+    const submission = await submitResearchResponse(
+      {
+        fullName: asString(payload.fullName),
+        email: asString(payload.email).toLowerCase(),
+        consent: asBoolean(payload.consent),
+        bodyAreas: payload.bodyAreas ?? {},
+        concerns: payload.concerns ?? {},
+        frequency: null,
+        currentSolutions: asStringArray(payload.currentSolutions),
+        ageRange: asString(payload.ageRange) || undefined,
+        employmentStatus: asString(payload.employmentStatus) || undefined,
+        occupation: asString(payload.occupation) || undefined,
+        lifeStage: asString(payload.lifeStage) || undefined,
+        incomeBand: asString(payload.incomeBand) || undefined,
+        challengeFrequency: asString(payload.challengeFrequency) || undefined,
+        confidenceLevel: asOptionalNumber(payload.confidenceLevel),
+        spentMoney: asString(payload.spentMoney) || undefined,
+        spentMoneyOn: asStringArray(payload.spentMoneyOn),
+        wouldUse: asString(payload.wouldUse) || undefined,
+        wouldPay: asString(payload.wouldPay) || undefined,
+        monthlyPrice: asString(payload.monthlyPrice) || undefined,
+        desiredInsights: asStringArray(payload.desiredInsights),
+        otherInsight: asString(payload.otherInsight) || undefined,
+        trustedSource: asStringArray(
+          payload.trustedSource ?? payload.trusted_source,
+        ),
+        recordings: uploadedFiles.map((uploadedFile) =>
+          toRecordingInput(payload, uploadedFile),
+        ),
+      },
+      participantId,
+    );
 
     researchLog("RESEARCH_SUBMISSION_COMPLETE", {
       participantId: submission.participantId,
@@ -204,7 +209,7 @@ router.post("/", voiceUpload, async (req, res) => {
       surveyResponseId: submission.surveyResponseId,
       objectKey: objectKeys[0] ?? null,
       objectKeys,
-});
+    });
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -322,33 +327,46 @@ router.get("/metrics", async (_req, res) => {
             LIMIT 5
           ) ranked
         ),
-        trusted_sources AS (
+      trusted_sources AS (
+        SELECT
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'value',
+                source,
+                'count',
+                response_count
+              )
+              ORDER BY response_count DESC, source ASC
+            ),
+            '[]'::jsonb
+          ) AS value
+        FROM (
           SELECT
-            COALESCE(
-              jsonb_agg(
-                jsonb_build_object(
-                  'value',
-                  trusted_source,
-                  'count',
-                  count
-                )
-                ORDER BY count DESC, trusted_source ASC
-              ),
-              '[]'::jsonb
-            ) AS value
-          FROM (
-            SELECT
-              trusted_source,
-              COUNT(*)::int AS count
-            FROM survey_responses
-            WHERE
-              trusted_source IS NOT NULL
-              AND trusted_source <> ''
-            GROUP BY trusted_source
-            ORDER BY count DESC, trusted_source ASC
-            LIMIT 5
-          ) ranked
-        )
+            source,
+            response_count
+          FROM research_trusted_source_counts
+          ORDER BY response_count DESC, source ASC
+          LIMIT 5
+        ) ranked
+      ),
+      price_point_counts AS (
+        SELECT
+          monthly_price,
+          COUNT(*)::int AS count
+        FROM survey_responses
+        WHERE monthly_price IS NOT NULL
+        GROUP BY monthly_price
+      ),
+
+      top_price_point AS (
+        SELECT
+          monthly_price,
+          count
+        FROM price_point_counts
+        ORDER BY count DESC
+        LIMIT 1
+      )
         SELECT
           totals.participants,
           top_concern.concern AS "topConcern",
@@ -357,9 +375,8 @@ router.get("/metrics", async (_req, res) => {
             THEN 0
             ELSE ROUND(
               top_concern.count * 100.0 /
-              totals.participants,
-              2
-            )
+              totals.participants
+            )::int
           END AS "topConcernPercent",
           CASE
             WHEN totals.participants = 0
@@ -372,9 +389,8 @@ router.get("/metrics", async (_req, res) => {
                     ''
                   )
                 ) IN ('yes', 'true', 'y')
-              ) * 100.0 / totals.participants,
-              2
-            )
+              ) * 100.0 / totals.participants
+            )::int
           END AS "spentMoneyPercent",
           CASE
             WHEN totals.participants = 0
@@ -387,15 +403,31 @@ router.get("/metrics", async (_req, res) => {
                     ''
                   )
                 ) IN ('yes', 'true', 'y')
-              ) * 100.0 / totals.participants,
-              2
-            )
+              ) * 100.0 / totals.participants
+            )::int
+          END AS "spentMoneyPercent",
+          CASE
+            WHEN totals.participants = 0
+            THEN 0
+            ELSE ROUND(
+              COUNT(*) FILTER (
+                WHERE LOWER(
+                  COALESCE(
+                    survey_responses.would_pay,
+                    ''
+                  )
+                ) IN ('yes', 'true', 'y')
+              ) * 100.0 / totals.participants
+            )::int
           END AS "wouldPayPercent",
           top_desired_insights.value AS "topDesiredInsights",
-          trusted_sources.value AS "trustedSources"
+          trusted_sources.value AS "trustedSources",
+          top_price_point.monthly_price AS "topPricePoint",
+          top_price_point.count AS "topPricePointCount"
         FROM totals
         CROSS JOIN top_desired_insights
         CROSS JOIN trusted_sources
+        CROSS JOIN top_price_point
         LEFT JOIN top_concern ON true
         LEFT JOIN survey_responses ON true
         GROUP BY
@@ -403,9 +435,13 @@ router.get("/metrics", async (_req, res) => {
           top_concern.concern,
           top_concern.count,
           top_desired_insights.value,
-          trusted_sources.value
+          trusted_sources.value,
+          top_price_point.monthly_price,
+          top_price_point.count
         `,
     );
+
+    console.log("METRICS RESULT", JSON.stringify(result.rows[0], null, 2));
 
     return res.json(
       result.rows[0] ?? {

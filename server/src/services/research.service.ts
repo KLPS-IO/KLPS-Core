@@ -60,10 +60,11 @@ const researchLog = (event: string, details: Record<string, unknown> = {}) => {
   );
 };
 
-export async function submitResearchResponse(data: ResearchSubmission) {
+export async function submitResearchResponse(
+  data: ResearchSubmission,
+  participantId: string,
+) {
   const client = await pool.connect();
-
-  const participantId = crypto.randomUUID();
 
   const surveyResponseId = crypto.randomUUID();
 
