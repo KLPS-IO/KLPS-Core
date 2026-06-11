@@ -178,6 +178,7 @@ router.post("/", voiceUpload, async (req, res) => {
         confidenceLevel: asOptionalNumber(payload.confidenceLevel),
         spentMoney: asString(payload.spentMoney) || undefined,
         spentMoneyOn: asStringArray(payload.spentMoneyOn),
+        otherSpentMoney: asString(payload.otherSpentMoney) || undefined,
         wouldUse: asString(payload.wouldUse) || undefined,
         wouldPay: asString(payload.wouldPay) || undefined,
         monthlyPrice: asString(payload.monthlyPrice) || undefined,

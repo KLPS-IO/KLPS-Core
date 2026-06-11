@@ -6,7 +6,8 @@ export type VoiceRecordingInput = {
   questionKey: string;
   questionText: string;
   durationSeconds: number;
-  r2ObjectKey: string;
+  r2ObjectKey?: string;
+  typedResponse?: string;
 };
 
 export type ResearchSubmission = {
@@ -30,6 +31,7 @@ export type ResearchSubmission = {
 
   spentMoney?: string;
   spentMoneyOn?: string[];
+  otherSpentMoney?: string;
 
   wouldUse?: string;
   wouldPay?: string;
@@ -136,6 +138,7 @@ export async function submitResearchResponse(
         confidence_level,
         spent_money,
         spent_money_on,
+        other_spent_money,
         would_use,
         would_pay,
         monthly_price,
@@ -147,7 +150,7 @@ export async function submitResearchResponse(
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
         $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-        $22
+        $22,$23
       )
       `,
       [
@@ -166,6 +169,7 @@ export async function submitResearchResponse(
         data.confidenceLevel ?? null,
         data.spentMoney ?? null,
         JSON.stringify(data.spentMoneyOn ?? []),
+        data.otherSpentMoney ?? null,
         data.wouldUse ?? null,
         data.wouldPay ?? null,
         data.monthlyPrice ?? null,
@@ -213,7 +217,8 @@ export async function submitResearchResponse(
           recording.questionKey,
           recording.questionText,
           recording.durationSeconds,
-          recording.r2ObjectKey,
+          recording.r2ObjectKey ?? null,
+          recording.typedResponse ?? null,
         ],
       );
 
