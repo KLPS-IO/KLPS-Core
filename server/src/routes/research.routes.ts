@@ -187,9 +187,21 @@ router.post("/", voiceUpload, async (req, res) => {
         trustedSource: asStringArray(
           payload.trustedSource ?? payload.trusted_source,
         ),
-        recordings: uploadedFiles.map((uploadedFile) =>
-          toRecordingInput(payload, uploadedFile),
-        ),
+        recordings:
+          uploadedFiles.length > 0
+            ? uploadedFiles.map((uploadedFile) =>
+                toRecordingInput(payload, uploadedFile),
+              )
+            : Array.isArray(payload.voiceRecordings)
+              ? payload.voiceRecordings.map((recording) => ({
+                  questionKey: asString(recording.questionKey),
+                  questionText: asString(recording.questionText),
+                  durationSeconds: Math.round(
+                    asNumber(recording.durationSeconds),
+                  ),
+                  typedResponse: asString(recording.typedResponse) || undefined,
+                }))
+              : [],
       },
       participantId,
     );
@@ -252,14 +264,11 @@ const toRecordingInput = (
 
     questionText: asString(metadata.questionText),
 
-    durationSeconds: Math.round(
-      asNumber(metadata.durationSeconds),
-    ),
+    durationSeconds: Math.round(asNumber(metadata.durationSeconds)),
 
     r2ObjectKey: uploadedFile.objectKey,
 
-    typedResponse:
-      asString(metadata.typedResponse) || undefined,
+    typedResponse: asString(metadata.typedResponse) || undefined,
   };
 };
 
