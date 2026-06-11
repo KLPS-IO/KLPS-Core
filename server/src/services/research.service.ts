@@ -222,6 +222,16 @@ export async function submitResearchResponse(
           recording.r2ObjectKey ?? null,
         ],
       );
+      console.log([
+        voiceRecordingId,
+        participantId,
+        surveyResponseId,
+        recording.questionKey,
+        recording.questionText,
+        recording.typedResponse ?? null,
+        recording.durationSeconds,
+        recording.r2ObjectKey ?? null,
+      ]);
 
       researchLog("VOICE_RECORDING_INSERT_COMPLETE", {
         participantId,
