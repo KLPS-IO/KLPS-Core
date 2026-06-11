@@ -217,9 +217,9 @@ export async function submitResearchResponse(
           surveyResponseId,
           recording.questionKey,
           recording.questionText,
+          recording.typedResponse ?? null,
           recording.durationSeconds,
           recording.r2ObjectKey ?? null,
-          recording.typedResponse ?? null,
         ],
       );
 
