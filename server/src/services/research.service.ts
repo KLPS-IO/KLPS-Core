@@ -194,7 +194,7 @@ export async function submitResearchResponse(
         voiceRecordingId,
         questionKey: recording.questionKey,
       });
-
+      console.log("VOICE INSERT", JSON.stringify(recording, null, 2));
       await client.query(
         `
         INSERT INTO voice_recordings (
