@@ -203,11 +203,12 @@ export async function submitResearchResponse(
           survey_response_id,
           question_key,
           question_text,
+          typed_response,
           duration_seconds,
           r2_object_key
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7
+          $1,$2,$3,$4,$5,$6,$7,$8
         )
         `,
         [

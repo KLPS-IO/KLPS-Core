@@ -249,9 +249,17 @@ const toRecordingInput = (
     questionKey:
       asString(metadata.questionKey) ||
       getQuestionKeyFromFile(uploadedFile.file),
+
     questionText: asString(metadata.questionText),
-    durationSeconds: Math.round(asNumber(metadata.durationSeconds)),
+
+    durationSeconds: Math.round(
+      asNumber(metadata.durationSeconds),
+    ),
+
     r2ObjectKey: uploadedFile.objectKey,
+
+    typedResponse:
+      asString(metadata.typedResponse) || undefined,
   };
 };
 
