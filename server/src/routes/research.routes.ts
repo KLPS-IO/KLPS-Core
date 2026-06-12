@@ -162,6 +162,7 @@ router.post("/", voiceUpload, async (req, res) => {
 
     const submission = await submitResearchResponse(
       {
+        bodyType: asString(payload.bodyType) || undefined,
         fullName: asString(payload.fullName),
         email: asString(payload.email).toLowerCase(),
         consent: asBoolean(payload.consent),
@@ -397,20 +398,56 @@ router.get("/metrics", async (_req, res) => {
               ) * 100.0 / totals.participants
             )::int
           END AS "spentMoneyPercent",
-          CASE
-            WHEN totals.participants = 0
-            THEN 0
-            ELSE ROUND(
-              COUNT(*) FILTER (
-                WHERE LOWER(
-                  COALESCE(
-                    survey_responses.would_pay,
-                    ''
-                  )
-                ) IN ('yes', 'true', 'y')
-              ) * 100.0 / totals.participants
-            )::int
-          END AS "wouldPayPercent",
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) IN ('yes', 'true', 'y')
+        )::int AS "yesCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) = 'maybe'
+        )::int AS "maybeCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) = 'no'
+        )::int AS "noCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) IN ('yes', 'true', 'y', 'maybe')
+        )::int AS "commercialInterestCount",
+
+        CASE
+          WHEN totals.participants = 0
+          THEN 0
+          ELSE ROUND(
+            COUNT(*) FILTER (
+              WHERE LOWER(
+                COALESCE(
+                  survey_responses.would_pay,
+                  ''
+                )
+              ) IN ('yes', 'true', 'y', 'maybe')
+            ) * 100.0 / totals.participants
+          )::int
+        END AS "commercialInterestPercent",
           top_desired_insights.value AS "topDesiredInsights",
           trusted_sources.value AS "trustedSources",
           top_price_point.monthly_price AS "topPricePoint",
@@ -438,7 +475,13 @@ router.get("/metrics", async (_req, res) => {
         topConcern: null,
         topConcernPercent: 0,
         spentMoneyPercent: 0,
-        wouldPayPercent: 0,
+
+        yesCount: 0,
+        maybeCount: 0,
+        noCount: 0,
+        commercialInterestCount: 0,
+        commercialInterestPercent: 0,
+
         topDesiredInsights: [],
         trustedSources: [],
       },
