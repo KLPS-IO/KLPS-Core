@@ -12,6 +12,7 @@ export type VoiceRecordingInput = {
 
 export type ResearchSubmission = {
   bodyType?: string;
+    otherBodyType?: string;
   fullName: string;
   email: string;
   consent: boolean;
@@ -127,6 +128,7 @@ export async function submitResearchResponse(
         id,
         participant_id,
         body_type,
+        other_body_type,
         body_areas,
         concerns,
         frequency,
@@ -152,13 +154,14 @@ export async function submitResearchResponse(
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
         $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-        $22,$23,$24
+        $22,$23,$24,$25
       )
       `,
       [
         surveyResponseId,
         participantId,
         data.bodyType ?? null,
+        data.otherBodyType ?? null,
         JSON.stringify(bodyAreas),
         JSON.stringify(concerns),
         data.frequency,

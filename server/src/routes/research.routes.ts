@@ -163,6 +163,7 @@ router.post("/", voiceUpload, async (req, res) => {
     const submission = await submitResearchResponse(
       {
         bodyType: asString(payload.bodyType) || undefined,
+        otherBodyType: asString(payload.otherBodyType) || undefined,
         fullName: asString(payload.fullName),
         email: asString(payload.email).toLowerCase(),
         consent: asBoolean(payload.consent),
