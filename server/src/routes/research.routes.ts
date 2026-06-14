@@ -291,6 +291,29 @@ router.get("/metrics", async (_req, res) => {
           ORDER BY response_count DESC, concern ASC
           LIMIT 1
         ),
+        top_concerns AS (
+          SELECT
+            COALESCE(
+              jsonb_agg(
+                jsonb_build_object(
+                  'value',
+                  concern,
+                  'count',
+                  response_count
+                )
+                ORDER BY response_count DESC, concern ASC
+              ),
+              '[]'::jsonb
+            ) AS value
+          FROM (
+            SELECT
+              concern,
+              response_count
+            FROM research_concern_counts
+            ORDER BY response_count DESC, concern ASC
+            LIMIT 5
+          ) ranked
+        ),
         desired_insight_values AS (
           SELECT
             insight
@@ -449,11 +472,13 @@ router.get("/metrics", async (_req, res) => {
             ) * 100.0 / totals.participants
           )::int
         END AS "commercialInterestPercent",
+          top_concerns.value AS "topConcerns",
           top_desired_insights.value AS "topDesiredInsights",
           trusted_sources.value AS "trustedSources",
           top_price_point.monthly_price AS "topPricePoint",
           top_price_point.count AS "topPricePointCount"
         FROM totals
+        CROSS JOIN top_concerns
         CROSS JOIN top_desired_insights
         CROSS JOIN trusted_sources
         CROSS JOIN top_price_point
@@ -463,6 +488,7 @@ router.get("/metrics", async (_req, res) => {
           totals.participants,
           top_concern.concern,
           top_concern.count,
+          top_concerns.value,
           top_desired_insights.value,
           trusted_sources.value,
           top_price_point.monthly_price,
@@ -482,7 +508,7 @@ router.get("/metrics", async (_req, res) => {
         noCount: 0,
         commercialInterestCount: 0,
         commercialInterestPercent: 0,
-
+        topConcerns: [],
         topDesiredInsights: [],
         trustedSources: [],
       },
