@@ -458,6 +458,20 @@ router.get("/metrics", async (_req, res) => {
           ) IN ('yes', 'true', 'y', 'maybe')
         )::int AS "commercialInterestCount",
 
+        COUNT(*) FILTER (
+          WHERE body_area_responses ? 'tummy'
+        )::int AS "tummyCount",
+
+        CASE
+          WHEN totals.participants = 0
+          THEN 0
+          ELSE ROUND(
+            COUNT(*) FILTER (
+              WHERE body_area_responses ? 'tummy'
+            ) * 100.0 / totals.participants
+          )::int
+        END AS "tummyPercent",
+
         CASE
           WHEN totals.participants = 0
           THEN 0
@@ -499,6 +513,8 @@ router.get("/metrics", async (_req, res) => {
     return res.json(
       result.rows[0] ?? {
         participants: 0,
+        tummyCount: 0,
+        tummyPercent: 0,
         topConcern: null,
         topConcernPercent: 0,
         spentMoneyPercent: 0,
