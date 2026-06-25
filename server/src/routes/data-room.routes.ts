@@ -274,10 +274,6 @@ router.post(
           "Login failed or this email is not authorised"
       });
     }
-    console.log("VERIFY LOGIN START");
-    console.log("EMAIL:", email);
-    console.log("USER RESULT:", user);
-
     await pool.query(
       `
       INSERT INTO data_room.login_attempts (
@@ -292,8 +288,6 @@ router.post(
         getIpAddress(req)
       ]
     );
-    console.log("CREATING SESSION");
-
     const session =
       await createSession(req, user);
 
@@ -302,8 +296,6 @@ router.post(
       session.token,
       session.expiresAt
     );
-
-    console.log("SESSION CREATED:", session);
 
     const nda =
       await hasAcceptedCurrentNda(user.id);
@@ -366,8 +358,6 @@ router.post(
       `,
       [req.dataRoomSessionId]
     );
-  console.log("SETTING COOKIE");
-
     clearSessionCookie(res);
 
     await logAccessEvent({
@@ -781,7 +771,6 @@ router.get(
               ? row.filename
               : undefined
         });
-      console.log("R2 URL:", r2Url);
       return res.redirect(302, r2Url);
       
     }

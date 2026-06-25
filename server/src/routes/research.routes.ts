@@ -4,10 +4,45 @@ import { uploadToR2 } from "../services/r2.service";
 import { submitResearchResponse } from "../services/research.service";
 import { pool } from "../storage/postgres.client";
 import crypto from "crypto";
+import {
+  requireAdmin,
+  requireDataRoomAuth,
+} from "../services/data-room.service";
 const router = Router();
+
+const MAX_RESEARCH_FILE_SIZE_BYTES =
+  Number(process.env.RESEARCH_UPLOAD_MAX_BYTES) ||
+  10 * 1024 * 1024;
+
+const ALLOWED_RESEARCH_AUDIO_TYPES = new Set([
+  "audio/aac",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "video/webm",
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_RESEARCH_FILE_SIZE_BYTES,
+    files: 4,
+    fields: 20,
+    fieldNameSize: 64,
+    fieldSize: 256 * 1024,
+    parts: 30,
+  },
+  fileFilter: (_req, file, callback) => {
+    if (!ALLOWED_RESEARCH_AUDIO_TYPES.has(file.mimetype)) {
+      return callback(
+        new Error("Unsupported research recording file type"),
+      );
+    }
+
+    callback(null, true);
+  },
 });
 
 const voiceUpload = upload.fields([
@@ -106,7 +141,25 @@ const getRecordingMetadata = (
 };
 
 const getQuestionKeyFromFile = (file: Express.Multer.File) =>
-  file.originalname.replace(/\.[^.]+$/, "");
+  sanitizeUploadFilename(file.originalname).replace(/\.[^.]+$/, "");
+
+const sanitizeUploadFilename = (filename: string) => {
+  const basename =
+    filename
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop() || "recording";
+
+  const safeName =
+    basename
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 120);
+
+  return safeName || "recording";
+};
 
 const getFieldIndex = (fieldname: string) => {
   const match = /^voice_(\d+)$/.exec(fieldname);
@@ -114,7 +167,34 @@ const getFieldIndex = (fieldname: string) => {
   return match ? Number(match[1]) : 0;
 };
 
-router.post("/", voiceUpload, async (req, res) => {
+const handleVoiceUpload: typeof voiceUpload = (req, res, next) => {
+  voiceUpload(req, res, (error) => {
+    if (!error) {
+      return next();
+    }
+
+    if (error instanceof multer.MulterError) {
+      const status =
+        error.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+
+      return res.status(status).json({
+        success: false,
+        error: "Invalid research upload",
+        code: error.code,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Invalid research upload",
+    });
+  });
+};
+
+router.post("/", handleVoiceUpload, async (req, res) => {
   try {
     researchLog("RESEARCH_REQUEST_RECEIVED", {
       contentType: req.header("content-type"),
@@ -138,10 +218,14 @@ router.post("/", voiceUpload, async (req, res) => {
 
     const uploadedFiles = await Promise.all(
       (files ?? []).map(async (file) => {
-        const objectKey = `research/survey-responses/${participantId}/${Date.now()}-${file.originalname}`;
+        const filename =
+          sanitizeUploadFilename(file.originalname);
+        const objectKey =
+          `research/survey-responses/${participantId}/` +
+          `${Date.now()}-${crypto.randomUUID()}-${filename}`;
         researchLog("R2_UPLOAD_STARTED", {
           fieldname: file.fieldname,
-          originalname: file.originalname,
+          originalname: filename,
           objectKey,
         });
 
@@ -149,7 +233,7 @@ router.post("/", voiceUpload, async (req, res) => {
 
         researchLog("R2_UPLOAD_COMPLETE", {
           fieldname: file.fieldname,
-          originalname: file.originalname,
+          originalname: filename,
           objectKey,
         });
 
@@ -274,7 +358,11 @@ const toRecordingInput = (
   };
 };
 
-router.get("/metrics", async (_req, res) => {
+router.get(
+  "/metrics",
+  requireDataRoomAuth,
+  requireAdmin,
+  async (_req, res) => {
   try {
     const result = await pool.query(
       `
@@ -537,7 +625,8 @@ router.get("/metrics", async (_req, res) => {
       error: "Research metrics failed",
     });
   }
-});
+  },
+);
 
 router.get("/", (_req, res) => {
   res.json({

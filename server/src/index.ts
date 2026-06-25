@@ -9,7 +9,9 @@ import founderRoutes from "./routes/founder";
 import dataRoomRoutes from "./routes/data-room.routes";
 import {
   getSessionUser,
-  hasAcceptedCurrentNda
+  hasAcceptedCurrentNda,
+  requireAdmin,
+  requireDataRoomAuth
 } from "./services/data-room.service";
 import { pool } from "./storage/postgres.client";
 import researchRoutes
@@ -17,6 +19,7 @@ import researchRoutes
 const app = express();
 
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
 /**
  * Allowed origins
@@ -85,6 +88,43 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=()"
+  );
+
+  if (process.env.NODE_ENV === "production") {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains"
+    );
+  }
+
+  next();
+});
+
+app.use((req, res, next) => {
+  if (!["POST", "PATCH", "DELETE"].includes(req.method)) {
+    return next();
+  }
+
+  const origin = req.get("origin");
+
+  if (origin && !allowedOrigins.includes(origin)) {
+    return res.status(403).json({
+      status: "error",
+      code: "origin_not_allowed",
+      message: "Request origin is not allowed"
+    });
+  }
+
+  next();
+});
+
 if (process.env.NODE_ENV === "production") {
   app.use((req, res, next) => {
     if (req.secure || req.header("x-forwarded-proto") === "https") {
@@ -116,7 +156,7 @@ app.use((req, res, next) => {
  * JSON Middleware
  */
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 /**
  * Routes
@@ -126,7 +166,12 @@ app.use("/api", signalRouter);
 app.use("/api/questions", questionRouter);
 app.use("/api/summary", summaryRoutes);
 app.use("/api/session", sessionRoutes);
-app.use("/api/founder", founderRoutes);
+app.use(
+  "/api/founder",
+  requireDataRoomAuth,
+  requireAdmin,
+  founderRoutes
+);
 app.use("/api/data-room", dataRoomRoutes);
 app.use("/api/research", researchRoutes);
 

@@ -26,6 +26,15 @@ const DATA_ROOM_SECRET =
   process.env.SESSION_SECRET ||
   "development-data-room-secret-change-me";
 
+if (
+  process.env.NODE_ENV === "production" &&
+  DATA_ROOM_SECRET === "development-data-room-secret-change-me"
+) {
+  throw new Error(
+    "DATA_ROOM_SECRET or SESSION_SECRET must be set in production"
+  );
+}
+
 export type DataRoomRole =
   | "founder_admin"
   | "authorised_user"
