@@ -628,6 +628,275 @@ router.get(
   },
 );
 
+router.get(
+  "/public/metrics",
+  async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        WITH totals AS (
+          SELECT
+            COUNT(*)::int AS participants
+          FROM participants
+        ),
+        top_concern AS (
+          SELECT
+            concern,
+            response_count AS count
+          FROM research_concern_counts
+          ORDER BY response_count DESC, concern ASC
+          LIMIT 1
+        ),
+        top_concerns AS (
+          SELECT
+            COALESCE(
+              jsonb_agg(
+                jsonb_build_object(
+                  'value',
+                  concern,
+                  'count',
+                  response_count
+                )
+                ORDER BY response_count DESC, concern ASC
+              ),
+              '[]'::jsonb
+            ) AS value
+          FROM (
+            SELECT
+              concern,
+              response_count
+            FROM research_concern_counts
+            ORDER BY response_count DESC, concern ASC
+            LIMIT 5
+          ) ranked
+        ),
+        desired_insight_values AS (
+          SELECT
+            insight
+          FROM survey_responses
+          CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE
+              WHEN jsonb_typeof(desired_insights) = 'array'
+              THEN desired_insights
+              ELSE '[]'::jsonb
+            END
+          ) AS insight
+        ),
+        top_desired_insights AS (
+          SELECT
+            COALESCE(
+              jsonb_agg(
+                jsonb_build_object(
+                  'value',
+                  insight,
+                  'count',
+                  count
+                )
+                ORDER BY count DESC, insight ASC
+              ),
+              '[]'::jsonb
+            ) AS value
+          FROM (
+            SELECT
+              insight,
+              COUNT(*)::int AS count
+            FROM desired_insight_values
+            GROUP BY insight
+            ORDER BY count DESC, insight ASC
+            LIMIT 5
+          ) ranked
+        ),
+      trusted_sources AS (
+        SELECT
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'value',
+                source,
+                'count',
+                response_count
+              )
+              ORDER BY response_count DESC, source ASC
+            ),
+            '[]'::jsonb
+          ) AS value
+        FROM (
+          SELECT
+            source,
+            response_count
+          FROM research_trusted_source_counts
+          ORDER BY response_count DESC, source ASC
+          LIMIT 5
+        ) ranked
+      ),
+      price_point_counts AS (
+        SELECT
+          monthly_price,
+          COUNT(*)::int AS count
+        FROM survey_responses
+        WHERE monthly_price IS NOT NULL
+        GROUP BY monthly_price
+      ),
+
+      top_price_point AS (
+        SELECT
+          monthly_price,
+          count
+        FROM price_point_counts
+        ORDER BY count DESC
+        LIMIT 1
+      )
+      SELECT
+          totals.participants,
+
+          (
+            SELECT COUNT(DISTINCT participant_id)::int
+            FROM voice_recordings
+          ) AS "voiceRecordings",
+
+          top_concern.concern AS "topConcern",
+
+          CASE
+            WHEN totals.participants = 0
+            THEN 0
+            ELSE ROUND(
+              top_concern.count * 100.0 /
+              totals.participants
+            )::int
+          END AS "topConcernPercent",
+          CASE
+            WHEN totals.participants = 0
+            THEN 0
+            ELSE ROUND(
+              COUNT(*) FILTER (
+                WHERE LOWER(
+                  COALESCE(
+                    survey_responses.spent_money,
+                    ''
+                  )
+                ) IN ('yes', 'true', 'y')
+              ) * 100.0 / totals.participants
+            )::int
+          END AS "spentMoneyPercent",
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) IN ('yes', 'true', 'y')
+        )::int AS "yesCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) = 'maybe'
+        )::int AS "maybeCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) = 'no'
+        )::int AS "noCount",
+
+        COUNT(*) FILTER (
+          WHERE LOWER(
+            COALESCE(
+              survey_responses.would_pay,
+              ''
+            )
+          ) IN ('yes', 'true', 'y', 'maybe')
+        )::int AS "commercialInterestCount",
+
+        COUNT(*) FILTER (
+          WHERE body_area_responses ? 'tummy'
+        )::int AS "tummyCount",
+
+        CASE
+          WHEN totals.participants = 0
+          THEN 0
+          ELSE ROUND(
+            COUNT(*) FILTER (
+              WHERE body_area_responses ? 'tummy'
+            ) * 100.0 / totals.participants
+          )::int
+        END AS "tummyPercent",
+
+        CASE
+          WHEN totals.participants = 0
+          THEN 0
+          ELSE ROUND(
+            COUNT(*) FILTER (
+              WHERE LOWER(
+                COALESCE(
+                  survey_responses.would_pay,
+                  ''
+                )
+              ) IN ('yes', 'true', 'y', 'maybe')
+            ) * 100.0 / totals.participants
+          )::int
+        END AS "commercialInterestPercent",
+          top_concerns.value AS "topConcerns",
+          top_desired_insights.value AS "topDesiredInsights",
+          trusted_sources.value AS "trustedSources",
+          top_price_point.monthly_price AS "topPricePoint",
+          top_price_point.count AS "topPricePointCount"
+        FROM totals
+        CROSS JOIN top_concerns
+        CROSS JOIN top_desired_insights
+        CROSS JOIN trusted_sources
+        CROSS JOIN top_price_point
+        LEFT JOIN top_concern ON true
+        LEFT JOIN survey_responses ON true
+        GROUP BY
+          totals.participants,
+          top_concern.concern,
+          top_concern.count,
+          top_concerns.value,
+          top_desired_insights.value,
+          trusted_sources.value,
+          top_price_point.monthly_price,
+          top_price_point.count
+        `,
+    );
+
+    return res.json(
+      result.rows[0] ?? {
+        participants: 0,
+        tummyCount: 0,
+        tummyPercent: 0,
+        topConcern: null,
+        topConcernPercent: 0,
+        spentMoneyPercent: 0,
+
+        yesCount: 0,
+        maybeCount: 0,
+        noCount: 0,
+        commercialInterestCount: 0,
+        commercialInterestPercent: 0,
+        topConcerns: [],
+        topDesiredInsights: [],
+        trustedSources: [],
+      },
+    );
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Research metrics failed",
+    });
+  }
+  },
+);
+
+
 router.get("/", (_req, res) => {
   res.json({
     success: true,
