@@ -126,6 +126,18 @@ const parseCookies = (cookieHeader?: string) => {
   return cookies;
 };
 
+const getBearerToken = (req: Request) => {
+  const authorization =
+    req.get("authorization");
+
+  if (!authorization) return null;
+
+  const match =
+    authorization.match(/^Bearer\s+(.+)$/i);
+
+  return match?.[1]?.trim() || null;
+};
+
 export const setSessionCookie = (
   res: Response,
   token: string,
@@ -402,7 +414,8 @@ export const getSessionUser = async (
   const cookies =
     parseCookies(req.headers.cookie);
   const token =
-    cookies[SESSION_COOKIE_NAME];
+    cookies[SESSION_COOKIE_NAME] ||
+    getBearerToken(req);
 
   if (!token) return null;
 

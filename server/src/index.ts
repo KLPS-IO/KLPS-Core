@@ -7,6 +7,7 @@ import summaryRoutes from "./routes/summary.routes";
 import sessionRoutes from "./routes/session.routes";
 import founderRoutes from "./routes/founder";
 import dataRoomRoutes from "./routes/data-room.routes";
+import waitlistRoutes from "./routes/waitlist.routes";
 import {
   getSessionUser,
   hasAcceptedCurrentNda,
@@ -27,8 +28,16 @@ app.disable("x-powered-by");
 
 const allowedOrigins = [
 
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://localhost:5173",
   "http://localhost:8080",
   "http://localhost:8081",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5000",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:8080",
+  "http://127.0.0.1:8081",
 
   "https://klps.co.uk",
   "https://www.klps.co.uk",
@@ -38,8 +47,26 @@ const allowedOrigins = [
 ];
 
 if (process.env.FRONTEND_ORIGIN) {
-  allowedOrigins.push(process.env.FRONTEND_ORIGIN);
+  allowedOrigins.push(
+    ...process.env.FRONTEND_ORIGIN
+      .split(",")
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  );
 }
+
+if (process.env.FRONTEND_ORIGINS) {
+  allowedOrigins.push(
+    ...process.env.FRONTEND_ORIGINS
+      .split(",")
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  );
+}
+
+const isAllowedOrigin = (origin: string) =>
+  allowedOrigins.includes(origin) ||
+  /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
 
 /**
  * CORS middleware
@@ -56,9 +83,7 @@ app.use(
 
       }
 
-      if (
-        allowedOrigins.includes(origin)
-      ) {
+      if (isAllowedOrigin(origin)) {
 
         callback(null, true);
 
@@ -114,7 +139,7 @@ app.use((req, res, next) => {
 
   const origin = req.get("origin");
 
-  if (origin && !allowedOrigins.includes(origin)) {
+  if (origin && !isAllowedOrigin(origin)) {
     return res.status(403).json({
       status: "error",
       code: "origin_not_allowed",
@@ -166,6 +191,7 @@ app.use("/api", signalRouter);
 app.use("/api/questions", questionRouter);
 app.use("/api/summary", summaryRoutes);
 app.use("/api/session", sessionRoutes);
+app.use("/api/waitlist", waitlistRoutes);
 app.use(
   "/api/founder",
   requireDataRoomAuth,
