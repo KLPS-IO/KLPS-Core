@@ -7,6 +7,7 @@ import summaryRoutes from "./routes/summary.routes";
 import sessionRoutes from "./routes/session.routes";
 import founderRoutes from "./routes/founder";
 import dataRoomRoutes from "./routes/data-room.routes";
+import financeRoutes from "./routes/finance.routes";
 import waitlistRoutes from "./routes/waitlist.routes";
 import {
   getSessionUser,
@@ -199,6 +200,7 @@ app.use(
   founderRoutes
 );
 app.use("/api/data-room", dataRoomRoutes);
+app.use("/api/finance", financeRoutes);
 app.use("/api/research", researchRoutes);
 
 app.get("/api/auth/me", async (req, res) => {
