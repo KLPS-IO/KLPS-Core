@@ -12,6 +12,16 @@ import {
   recalculateAndLog
 } from "../services/finance-engine.service";
 import { pool } from "../storage/postgres.client";
+import {
+  createEvidence,
+  getEvidence,
+  getEvidenceVersions,
+  getLinkedEvidence,
+  linkEvidence,
+  listEvidence,
+  unlinkEvidence,
+  updateEvidence
+} from "../services/evidence.service";
 
 const router = express.Router();
 
@@ -60,7 +70,7 @@ const ndaMiddleware = async (
   next();
 };
 
-const requireFinanceWrite = (
+export const requireFinanceWrite = (
   req: DataRoomRequest,
   res: express.Response,
   next: express.NextFunction
@@ -455,90 +465,11 @@ router.post(
   "/evidence",
   requireFinanceWrite,
   asyncHandler(async (req, res) => {
-    const evidenceType =
-      requireText(req.body?.evidence_type, "evidence_type");
-    const title =
-      requireText(req.body?.title, "title");
-    const changeReason =
-      optionalText(req.body?.change_reason) ??
-      "Added finance evidence";
-    const scenarioKey =
-      getScenarioKey(req.body?.scenario);
-    const client = await pool.connect();
-
-    try {
-      await client.query("BEGIN");
-
-      const evidence = await client.query(
-        `
-        INSERT INTO finance_os.evidence (
-          evidence_type,
-          title,
-          summary,
-          source,
-          supplier_name,
-          file_name,
-          file_size,
-          content_type,
-          storage_provider,
-          storage_key,
-          signed_url_available,
-          metadata,
-          created_by,
-          updated_by,
-          change_reason
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'placeholder', $9, false, $10, $11, $11, $12)
-        RETURNING *
-        `,
-        [
-          evidenceType,
-          title,
-          optionalText(req.body?.summary),
-          optionalText(req.body?.source),
-          optionalText(req.body?.supplier_name),
-          optionalText(req.body?.file_name),
-          optionalNumber(req.body?.file_size),
-          optionalText(req.body?.content_type),
-          optionalText(req.body?.storage_key),
-          JSON.stringify(parseJsonObject(req.body?.metadata)),
-          req.dataRoomUser!.id,
-          changeReason
-        ]
-      );
-
-      const model =
-        await recalculateAndLog({
-          scenarioKey,
-          eventType: "Added Supplier Quote",
-          entityType: "evidence",
-          entityId: evidence.rows[0].id,
-          summary: `Added finance evidence: ${title}`,
-          metadata: {
-            evidence_type: evidenceType
-          },
-          user: {
-            userId: req.dataRoomUser!.id
-          },
-          client
-        });
-
-      await client.query("COMMIT");
-
-      return res.status(201).json(
-        jsonOk({
-          evidence: evidence.rows[0],
-          model
-        })
-      );
-    }
-    catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    }
-    finally {
-      client.release();
-    }
+    const evidence = await createEvidence(
+      req.body ?? {},
+      req.dataRoomUser!.id
+    );
+    return res.status(201).json(jsonOk({ evidence }));
   })
 );
 
@@ -546,89 +477,83 @@ router.post(
   "/evidence/:id/link",
   requireFinanceWrite,
   asyncHandler(async (req, res) => {
-    const entityType =
-      requireText(req.body?.entity_type, "entity_type");
-    const entityId =
-      requireText(req.body?.entity_id, "entity_id");
-    const relationship =
-      optionalText(req.body?.relationship) ?? "supports";
-    const changeReason =
-      optionalText(req.body?.change_reason) ??
-      "Linked finance evidence";
-    const scenarioKey =
-      getScenarioKey(req.body?.scenario);
-    const client = await pool.connect();
+    const link = await linkEvidence(
+      getParam(req.params.id),
+      req.body ?? {},
+      req.dataRoomUser!.id
+    );
+    return res.status(201).json(jsonOk({ link }));
+  })
+);
 
+router.get(
+  "/evidence",
+  asyncHandler(async (req, res) => {
+    const evidence = await listEvidence(req.query);
+    return res.json(jsonOk({ evidence }));
+  })
+);
+
+router.get(
+  "/evidence/linked/:entityType/:entityId",
+  asyncHandler(async (req, res) => {
+    const evidence = await getLinkedEvidence(
+      req.params.entityType,
+      req.params.entityId
+    );
+    return res.json(jsonOk({ evidence }));
+  })
+);
+
+router.get(
+  "/evidence/:id",
+  asyncHandler(async (req, res) => {
+    const evidence = await getEvidence(getParam(req.params.id));
+    return res.json(jsonOk({ evidence }));
+  })
+);
+
+router.patch(
+  "/evidence/:id",
+  requireFinanceWrite,
+  asyncHandler(async (req, res) => {
+    const client = await pool.connect();
     try {
       await client.query("BEGIN");
-
-      const link = await client.query(
-        `
-        INSERT INTO finance_os.evidence_links (
-          evidence_id,
-          entity_type,
-          entity_id,
-          relationship,
-          notes,
-          created_by,
-          updated_by,
-          change_reason
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
-        ON CONFLICT (evidence_id, entity_type, entity_id, relationship)
-        DO UPDATE SET
-          notes = EXCLUDED.notes,
-          updated_by = EXCLUDED.updated_by,
-          change_reason = EXCLUDED.change_reason,
-          version = finance_os.evidence_links.version + 1
-        RETURNING *
-        `,
-        [
-          req.params.id,
-          entityType,
-          entityId,
-          relationship,
-          optionalText(req.body?.notes),
-          req.dataRoomUser!.id,
-          changeReason
-        ]
+      const evidence = await updateEvidence(
+        getParam(req.params.id),
+        req.body ?? {},
+        req.dataRoomUser!.id,
+        client
       );
-
-      const model =
-        await recalculateAndLog({
-          scenarioKey,
-          eventType: "Added Supplier Quote",
-          entityType: "evidence_link",
-          entityId: link.rows[0].id,
-          summary: `Linked evidence to ${entityType}`,
-          metadata: {
-            evidence_id: req.params.id,
-            linked_entity_type: entityType,
-            linked_entity_id: entityId,
-            relationship
-          },
-          user: {
-            userId: req.dataRoomUser!.id
-          },
-          client
-        });
-
       await client.query("COMMIT");
-
-      return res.status(201).json(
-        jsonOk({
-          link: link.rows[0],
-          model
-        })
-      );
-    }
-    catch (error) {
+      return res.json(jsonOk({ evidence }));
+    } catch (error) {
       await client.query("ROLLBACK");
       throw error;
-    }
-    finally {
+    } finally {
       client.release();
     }
+  })
+);
+
+router.get(
+  "/evidence/:id/versions",
+  asyncHandler(async (req, res) => {
+    const versions = await getEvidenceVersions(getParam(req.params.id));
+    return res.json(jsonOk({ versions }));
+  })
+);
+
+router.delete(
+  "/evidence/:id/links/:linkId",
+  requireFinanceWrite,
+  asyncHandler(async (req, res) => {
+    const link = await unlinkEvidence(
+      getParam(req.params.id),
+      getParam(req.params.linkId)
+    );
+    return res.json(jsonOk({ link }));
   })
 );
 
