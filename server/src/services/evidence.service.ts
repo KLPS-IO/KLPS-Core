@@ -126,7 +126,8 @@ export const updateEvidence = async (id: string, input: Input, userId: string, d
 const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>> = {
   assumption: "finance_os.assumptions", product: "finance_os.products", decision: "finance_os.decisions",
   risk: "finance_os.risks", funding: "finance_os.funding", report: "finance_os.reports",
-  scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents"
+  scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",
+  company: "finance_os.company"
 };
 
 export const linkEvidence = async (evidenceId: string, input: Input, userId: string, db: Db = pool) => {

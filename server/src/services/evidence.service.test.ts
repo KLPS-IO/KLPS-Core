@@ -73,6 +73,44 @@ test("missing linked entities are rejected", async () => {
   );
 });
 
+test("company evidence links validate the canonical company target", async () => {
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (queries.length === 1) return { rows: [{ id: EVIDENCE_ID }] };
+    if (queries.length === 2) return { rows: [{ id: ENTITY_ID }] };
+    return { rows: [{ id: "44444444-4444-4444-8444-444444444444", entity_type: "company", entity_id: ENTITY_ID }] };
+  }};
+  const link = await linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never);
+  assert.match(queries[1], /finance_os\.company/);
+  assert.equal(link.entity_type, "company");
+});
+
+test("missing company evidence targets return not found instead of unsupported", async () => {
+  let call = 0;
+  const db = { query: async () => {
+    call += 1;
+    return call === 1 ? { rows: [{ id: EVIDENCE_ID }] } : { rows: [] };
+  }};
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never),
+    (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "linked_entity_not_found" && (reason as { statusCode?: number }).statusCode === 404
+  );
+});
+
+test("duplicate company evidence links return conflict", async () => {
+  let call = 0;
+  const db = { query: async () => {
+    call += 1;
+    if (call <= 2) return { rows: [{ id: call === 1 ? EVIDENCE_ID : ENTITY_ID }] };
+    throw Object.assign(new Error("duplicate"), { code: "23505" });
+  }};
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never),
+    (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "duplicate_evidence_link" && (reason as { statusCode?: number }).statusCode === 409
+  );
+});
+
 test("updates snapshot the prior version and set update audit fields", async () => {
   const queries: string[] = [];
   const db = { query: async (sql: string) => {

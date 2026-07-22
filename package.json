@@ -18,7 +18,7 @@
     "qs": "^6.15.3",
     "resend": "^6.12.3"
   },
-  "name": "klps-lema",
+  "name": "klps-core",
   "version": "1.0.0",
   "description": "AI Engine",
   "main": "index.js",
@@ -33,14 +33,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KLPS-IO/KLPS-LEMA.git"
+    "url": "git+https://github.com/KLPS-IO/KLPS-Core.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/KLPS-IO/KLPS-LEMA/issues"
+    "url": "https://github.com/KLPS-IO/KLPS-Core/issues"
   },
-  "homepage": "https://github.com/KLPS-IO/KLPS-LEMA#readme"
+  "homepage": "https://github.com/KLPS-IO/KLPS-Core#readme"
 }

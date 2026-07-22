@@ -22,6 +22,13 @@ import {
   unlinkEvidence,
   updateEvidence
 } from "../services/evidence.service";
+import {
+  getCompany,
+  getCompanyEvidence,
+  getCompanyHealth,
+  getCompanyVersions,
+  updateCompany
+} from "../services/company.service";
 
 const router = express.Router();
 
@@ -160,6 +167,39 @@ router.use(
   requireAuthorised,
   ndaMiddleware
 );
+
+router.get("/company", asyncHandler(async (_req, res) => {
+  const company = await getCompany();
+  const links = await getCompanyEvidence();
+  return res.json(jsonOk({ company: { ...company, links } }));
+}));
+
+router.patch("/company", requireFinanceWrite, asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const company = await updateCompany(req.body ?? {}, req.dataRoomUser!.id, client);
+    await client.query("COMMIT");
+    return res.json(jsonOk({ company }));
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+router.get("/company/versions", asyncHandler(async (_req, res) => {
+  return res.json(jsonOk({ versions: await getCompanyVersions() }));
+}));
+
+router.get("/company/health", asyncHandler(async (_req, res) => {
+  return res.json(jsonOk({ health: await getCompanyHealth() }));
+}));
+
+router.get("/company/evidence", asyncHandler(async (_req, res) => {
+  return res.json(jsonOk({ evidence: await getCompanyEvidence() }));
+}));
 
 router.get(
   "/state",

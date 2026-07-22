@@ -43,7 +43,7 @@ const allowedOrigins = [
   "https://klps.co.uk",
   "https://www.klps.co.uk",
 
-  "https://klps-lema.vercel.app"
+  "https://klps-core.vercel.app"
 
 ];
 
