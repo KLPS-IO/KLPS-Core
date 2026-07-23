@@ -76,6 +76,15 @@ export const validateEvidenceInput = (input: Input, partial = false) => {
 };
 
 const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "change_reason"];
+const canonicalLinksLateral = `LEFT JOIN LATERAL (
+  SELECT jsonb_agg(canonical_link ORDER BY canonical_link.created_at) AS links
+  FROM finance_os.evidence_links canonical_link
+  WHERE canonical_link.evidence_id = e.id
+) canonical_links ON TRUE`;
+const withCanonicalLinks = <T extends Record<string, unknown>>(row: T) => ({
+  ...row,
+  links: Array.isArray(row.links) ? row.links : []
+});
 
 export const createEvidence = async (input: Input, userId: string, db: Db = pool) => {
   const value = validateEvidenceInput(input);
@@ -86,9 +95,9 @@ export const createEvidence = async (input: Input, userId: string, db: Db = pool
 };
 
 export const getEvidence = async (id: string, db: Db = pool) => {
-  const result = await db.query(`SELECT e.*, COALESCE(jsonb_agg(l ORDER BY l.created_at) FILTER (WHERE l.id IS NOT NULL), '[]'::jsonb) AS links FROM finance_os.evidence e LEFT JOIN finance_os.evidence_links l ON l.evidence_id = e.id WHERE e.id = $1 GROUP BY e.id`, [uuid(id, "evidence id")]);
+  const result = await db.query(`SELECT e.*, COALESCE(canonical_links.links, '[]'::jsonb) AS links FROM finance_os.evidence e ${canonicalLinksLateral} WHERE e.id = $1`, [uuid(id, "evidence id")]);
   if (!result.rows[0]) throw error("Evidence not found", "evidence_not_found", 404);
-  return result.rows[0];
+  return withCanonicalLinks(result.rows[0]);
 };
 
 export const listEvidence = async (filters: Input, db: Db = pool) => {
@@ -101,13 +110,23 @@ export const listEvidence = async (filters: Input, db: Db = pool) => {
   if (text(filters.source_organisation)) add("e.source_organisation ILIKE '%' || ? || '%'", text(filters.source_organisation));
   if (text(filters.owner)) add("e.owner ILIKE '%' || ? || '%'", text(filters.owner));
   if (filters.verification_status) add("e.verification_status = ?", enumValue(filters.verification_status, "verification_status", VERIFICATION_STATUSES));
-  if (filters.linked_entity_type) add("l.entity_type = ?", enumValue(filters.linked_entity_type, "linked_entity_type", LINKED_ENTITY_TYPES));
-  if (filters.linked_entity_id) add("l.entity_id = ?", uuid(filters.linked_entity_id, "linked_entity_id"));
+  const linkWhere: string[] = [];
+  if (filters.linked_entity_type) {
+    params.push(enumValue(filters.linked_entity_type, "linked_entity_type", LINKED_ENTITY_TYPES));
+    linkWhere.push(`filtered_link.entity_type = $${params.length}`);
+  }
+  if (filters.linked_entity_id) {
+    params.push(uuid(filters.linked_entity_id, "linked_entity_id"));
+    linkWhere.push(`filtered_link.entity_id = $${params.length}`);
+  }
+  if (linkWhere.length) {
+    where.push(`EXISTS (SELECT 1 FROM finance_os.evidence_links filtered_link WHERE filtered_link.evidence_id = e.id AND ${linkWhere.join(" AND ")})`);
+  }
   if (text(filters.keyword)) add("(e.title ILIKE '%' || ? || '%' OR e.description ILIKE '%' || $" + (params.length + 1) + " || '%' OR e.source_organisation ILIKE '%' || $" + (params.length + 1) + " || '%')", text(filters.keyword));
   const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
   params.push(limit);
-  const result = await db.query(`SELECT DISTINCT e.* FROM finance_os.evidence e LEFT JOIN finance_os.evidence_links l ON l.evidence_id = e.id ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY e.created_at DESC LIMIT $${params.length}`, params);
-  return result.rows;
+  const result = await db.query(`SELECT e.*, COALESCE(canonical_links.links, '[]'::jsonb) AS links FROM finance_os.evidence e ${canonicalLinksLateral} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY e.created_at DESC LIMIT $${params.length}`, params);
+  return result.rows.map(withCanonicalLinks);
 };
 
 export const updateEvidence = async (id: string, input: Input, userId: string, db: Db = pool) => {

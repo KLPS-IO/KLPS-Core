@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createEvidence,
+  getEvidence,
   linkEvidence,
+  listEvidence,
   updateEvidence,
   validateEvidenceInput
 } from "./evidence.service";
@@ -83,6 +85,91 @@ test("create evidence delegates evidence-code generation to PostgreSQL and sets 
   assert.match(sql, /created_by, updated_by/);
   assert.equal(params[params.length - 1], USER_ID);
   assert.equal(row.evidence_code, "EVD-0001");
+});
+
+const COMPANY_LINK = {
+  id: "44444444-4444-4444-8444-444444444444",
+  evidence_id: EVIDENCE_ID,
+  entity_type: "company",
+  entity_id: ENTITY_ID,
+  relationship: "Supports company formation and ownership",
+  notes: null,
+  created_at: "2026-07-23T10:00:00.000Z"
+};
+
+test("list evidence always returns links as an empty array when no links exist", async () => {
+  const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID, title: "Unlinked", links: null }] }) };
+  const rows = await listEvidence({}, db as never);
+  assert.deepEqual(rows, [{ id: EVIDENCE_ID, title: "Unlinked", links: [] }]);
+});
+
+test("list evidence returns one canonical Company link", async () => {
+  const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID, links: [COMPANY_LINK] }] }) };
+  const rows = await listEvidence({}, db as never);
+  assert.equal(rows[0].links.length, 1);
+  assert.deepEqual(rows[0].links[0], COMPANY_LINK);
+});
+
+test("list evidence returns one evidence row with all canonical links", async () => {
+  let sql = "";
+  const secondLink = {
+    ...COMPANY_LINK,
+    id: "55555555-5555-4555-8555-555555555555",
+    entity_type: "assumption",
+    entity_id: "66666666-6666-4666-8666-666666666666",
+    relationship: "supports"
+  };
+  const db = { query: async (query: string) => {
+    sql = query;
+    return { rows: [{ id: EVIDENCE_ID, links: [COMPANY_LINK, secondLink] }] };
+  }};
+  const rows = await listEvidence({}, db as never);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].links, [COMPANY_LINK, secondLink]);
+  assert.match(sql, /LEFT JOIN LATERAL/);
+  assert.match(sql, /jsonb_agg\(canonical_link ORDER BY canonical_link\.created_at\)/);
+  assert.doesNotMatch(sql, /SELECT DISTINCT/);
+});
+
+test("list evidence preserves filters, descending ordering, and bounded limit", async () => {
+  let sql = "";
+  let params: unknown[] = [];
+  const db = { query: async (query: string, values?: unknown[]) => {
+    sql = query;
+    params = values ?? [];
+    return { rows: [] };
+  }};
+  await listEvidence({
+    title: "formation",
+    category: "Corporate",
+    evidence_type: "document",
+    linked_entity_type: "company",
+    linked_entity_id: ENTITY_ID,
+    limit: 9999
+  }, db as never);
+  assert.match(sql, /e\.title ILIKE/);
+  assert.match(sql, /e\.document_category = \$2/);
+  assert.match(sql, /e\.evidence_type = \$3/);
+  assert.match(sql, /EXISTS \(SELECT 1 FROM finance_os\.evidence_links filtered_link/);
+  assert.match(sql, /ORDER BY e\.created_at DESC LIMIT \$6/);
+  assert.deepEqual(params, ["formation", "Corporate", "document", "company", ENTITY_ID, 500]);
+});
+
+test("list and detail use the same canonical link representation", async () => {
+  const queries: string[] = [];
+  const db = { query: async (query: string) => {
+    queries.push(query);
+    return { rows: [{ id: EVIDENCE_ID, links: [COMPANY_LINK] }] };
+  }};
+  const listed = await listEvidence({}, db as never);
+  const detailed = await getEvidence(EVIDENCE_ID, db as never);
+  assert.deepEqual(listed[0].links, detailed.links);
+  assert.deepEqual(Object.keys(listed[0].links[0]), Object.keys(detailed.links[0]));
+  assert.equal(queries.length, 2);
+  for (const query of queries) {
+    assert.match(query, /COALESCE\(canonical_links\.links, '\[\]'::jsonb\) AS links/);
+    assert.match(query, /FROM finance_os\.evidence_links canonical_link/);
+  }
 });
 
 test("duplicate entity links return a conflict instead of updating the existing link", async () => {
