@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
 
 export const DOCUMENT_CATEGORIES = [
-  "Corporate", "Finance", "Fundraising", "Product", "Technology",
+  "Read First", "Corporate", "Finance", "Fundraising", "Product", "Technology",
   "Intellectual Property", "Manufacturing", "Market", "Customers",
   "Research", "Regulatory", "Legal", "Team", "Press", "Archive"
 ] as const;
@@ -14,7 +14,7 @@ export const DOCUMENT_STATUSES = [
 ] as const;
 export const EVIDENCE_TYPES = [
   "supplier_quote", "research", "survey", "competitor_analysis",
-  "contract", "invoice", "prototype_cost"
+  "contract", "invoice", "prototype_cost", "document"
 ] as const;
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
@@ -55,26 +55,27 @@ const uuid = (value: unknown, field: string) => {
 };
 
 export const validateEvidenceInput = (input: Input, partial = false) => {
+  const backendManaged = ["folder_path", "r2_object_key", "evidence_code", "file_version", "storage_provider", "original_filename", "mime_type", "file_size", "checksum"]
+    .filter(field => field in input);
+  if (backendManaged.length) throw error(`Backend-managed fields are not accepted: ${backendManaged.join(", ")}`);
   const output: Record<string, unknown> = {};
   if (!partial || "title" in input) output.title = requiredText(input.title, "title");
   if (!partial || "evidence_type" in input) output.evidence_type = enumValue(input.evidence_type, "evidence_type", EVIDENCE_TYPES);
   if ("description" in input || "summary" in input) output.description = text(input.description ?? input.summary);
   if ("document_category" in input) output.document_category = enumValue(input.document_category, "document_category", DOCUMENT_CATEGORIES);
   if ("source_organisation" in input || "source" in input) output.source_organisation = text(input.source_organisation ?? input.source);
-  for (const field of ["owner", "review_frequency", "r2_object_key", "original_filename", "mime_type", "checksum", "folder_path"] as const) {
+  for (const field of ["owner", "review_frequency"] as const) {
     if (field in input) output[field] = text(input[field]);
   }
   if ("confidence" in input) output.confidence = number(input.confidence, "confidence", 0, 1);
   if (!partial || "verification_status" in input) output.verification_status = enumValue(input.verification_status, "verification_status", VERIFICATION_STATUSES, "Unknown");
   if (!partial || "document_status" in input) output.document_status = enumValue(input.document_status, "document_status", DOCUMENT_STATUSES, "Draft");
-  for (const field of ["last_reviewed_date", "next_review_date", "expiry_date"] as const) if (field in input) output[field] = date(input[field], field);
-  if ("file_size" in input) output.file_size = number(input.file_size, "file_size", 0);
-  if ("file_version" in input) output.file_version = number(input.file_version, "file_version", 1);
+  for (const field of ["last_reviewed_date", "next_review_date", "expiry_date", "document_date"] as const) if (field in input) output[field] = date(input[field], field);
   if ("change_reason" in input || !partial) output.change_reason = text(input.change_reason) ?? (partial ? "Updated evidence metadata" : "Created evidence metadata");
   return output;
 };
 
-const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "r2_object_key", "original_filename", "mime_type", "file_size", "checksum", "file_version", "folder_path", "change_reason"];
+const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "change_reason"];
 
 export const createEvidence = async (input: Input, userId: string, db: Db = pool) => {
   const value = validateEvidenceInput(input);

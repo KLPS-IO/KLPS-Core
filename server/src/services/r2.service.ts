@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import {
   S3Client,
-  PutObjectCommand
+  PutObjectCommand,
+  DeleteObjectCommand
 } from "@aws-sdk/client-s3";
 
 type PresignInput = {
@@ -291,4 +292,13 @@ export const uploadToR2 = async (
   );
 
   return objectKey;
+};
+
+export const deleteFromR2 = async (objectKey: string) => {
+  const config = getR2Config();
+  if (!config) throw new Error("Cloudflare R2 is not configured");
+  await getR2Client().send(new DeleteObjectCommand({
+    Bucket: config.bucket,
+    Key: objectKey
+  }));
 };

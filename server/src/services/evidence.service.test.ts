@@ -7,6 +7,10 @@ import {
   validateEvidenceInput
 } from "./evidence.service";
 import { requireFinanceWrite } from "../routes/finance.routes";
+import {
+  buildDocumentStorage,
+  parseDocumentUploadInput
+} from "./document-upload.service";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const EVIDENCE_ID = "22222222-2222-4222-8222-222222222222";
@@ -31,6 +35,40 @@ test("evidence validation rejects invalid categories and statuses", () => {
   assert.throws(() => validateEvidenceInput({ title: "x", evidence_type: "research", document_category: "Other" }), /Invalid document_category/);
   assert.throws(() => validateEvidenceInput({ title: "x", evidence_type: "research", verification_status: "Maybe" }), /Invalid verification_status/);
   assert.throws(() => validateEvidenceInput({ title: "x", evidence_type: "research", document_status: "Deleted" }), /Invalid document_status/);
+});
+
+test("clients cannot submit backend-managed storage or naming fields", () => {
+  for (const field of ["folder_path", "r2_object_key", "evidence_code", "file_version", "storage_provider"]) {
+    assert.throws(
+      () => validateEvidenceInput({ title: "x", evidence_type: "document", [field]: "chosen-by-client" }),
+      /Backend-managed fields are not accepted/
+    );
+  }
+});
+
+test("document upload linking is all-or-nothing", () => {
+  assert.throws(
+    () => parseDocumentUploadInput({ title: "Pack", document_category: "Finance", linked_entity_type: "company" }),
+    (reason: unknown) => (reason as { code?: string }).code === "partial_entity_link"
+  );
+  const unlinked = parseDocumentUploadInput({ title: "Pack", document_category: "Finance", document_date: "2026-07-11" });
+  assert.equal(unlinked.linkedEntityType, null);
+  const linked = parseDocumentUploadInput({
+    title: "Pack", document_category: "Finance", document_date: "2026-07-11",
+    linked_entity_type: "company", linked_entity_id: ENTITY_ID, relationship: "supports"
+  });
+  assert.equal(linked.relationship, "supports");
+});
+
+test("document storage naming follows the canonical Finance OS mapping", () => {
+  assert.deepEqual(
+    buildDocumentStorage("Finance", "EVD-0003", "HMRC VAT Registration Approval", "2026-07-11", "source.PDF"),
+    {
+      folder: "02_FINANCE",
+      filename: "EVD-0003_HMRC-VAT-Registration-Approval_2026-07-11_v1.pdf",
+      objectKey: "02_FINANCE/EVD-0003_HMRC-VAT-Registration-Approval_2026-07-11_v1.pdf"
+    }
+  );
 });
 
 test("create evidence delegates evidence-code generation to PostgreSQL and sets audit users", async () => {

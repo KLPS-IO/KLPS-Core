@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import {
   DataRoomRequest,
   hasAcceptedCurrentNda,
@@ -23,6 +24,19 @@ import {
   updateEvidence
 } from "../services/evidence.service";
 import {
+  buildDocumentStorage,
+  createOptionalUploadLink,
+  createUploadedEvidenceRecord,
+  finishUploadedEvidenceRecord,
+  parseDocumentUploadInput
+} from "../services/document-upload.service";
+import {
+  createR2PresignedUrl,
+  deleteFromR2,
+  isR2Configured,
+  uploadToR2
+} from "../services/r2.service";
+import {
   getCompany,
   getCompanyEvidence,
   getCompanyHealth,
@@ -31,6 +45,18 @@ import {
 } from "../services/company.service";
 
 const router = express.Router();
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.DOCUMENT_UPLOAD_MAX_BYTES) || 25 * 1024 * 1024,
+    files: 1,
+    fields: 20,
+    fieldNameSize: 64,
+    fieldSize: 256 * 1024,
+    parts: 22
+  }
+});
 
 const jsonOk = (
   data: Record<string, unknown> = {}
@@ -510,6 +536,77 @@ router.post(
       req.dataRoomUser!.id
     );
     return res.status(201).json(jsonOk({ evidence }));
+  })
+);
+
+router.post(
+  "/evidence/upload",
+  requireFinanceWrite,
+  documentUpload.single("file"),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ status: "error", code: "file_required", message: "file is required" });
+    }
+    if (!isR2Configured()) {
+      return res.status(503).json({ status: "error", code: "r2_not_configured", message: "Document storage is unavailable" });
+    }
+
+    const input = parseDocumentUploadInput(req.body ?? {});
+    const client = await pool.connect();
+    let uploadedObjectKey: string | null = null;
+    try {
+      await client.query("BEGIN");
+      const created = await createUploadedEvidenceRecord(input, req.file, req.dataRoomUser!.id, client);
+      const storage = buildDocumentStorage(input.documentCategory, created.evidence_code, input.title, input.documentDate, req.file.originalname);
+      await uploadToR2(storage.objectKey, req.file.buffer, req.file.mimetype || "application/octet-stream");
+      uploadedObjectKey = storage.objectKey;
+      const evidence = await finishUploadedEvidenceRecord(created.id, storage.objectKey, client);
+      const link = await createOptionalUploadLink(created.id, input, req.dataRoomUser!.id, client);
+      await client.query("COMMIT");
+      return res.status(201).json(jsonOk({ evidence, link }));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (uploadedObjectKey) {
+        try {
+          await deleteFromR2(uploadedObjectKey);
+        } catch (cleanupError) {
+          console.error("Failed to remove rolled-back evidence upload from R2", cleanupError);
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/evidence/:id/access",
+  asyncHandler(async (req, res) => {
+    const action = req.body?.action;
+    if (action !== "view" && action !== "download") {
+      return res.status(400).json({ status: "error", code: "invalid_access_action", message: "action must be view or download" });
+    }
+    const evidence = await getEvidence(getParam(req.params.id));
+    if (!evidence.r2_object_key || evidence.storage_provider !== "r2") {
+      return res.status(404).json({ status: "error", code: "evidence_file_not_found", message: "Evidence file not found" });
+    }
+    if (!isR2Configured()) {
+      return res.status(503).json({ status: "error", code: "r2_not_configured", message: "Document storage is unavailable" });
+    }
+    const expiresSeconds = 300;
+    const filename = String(evidence.r2_object_key).split("/").pop();
+    const signedUrl = createR2PresignedUrl({
+      method: "GET",
+      objectKey: evidence.r2_object_key,
+      expiresSeconds,
+      responseFilename: action === "download" ? filename : undefined
+    });
+    return res.json(jsonOk({
+      action,
+      signed_url: signedUrl,
+      expires_at: new Date(Date.now() + expiresSeconds * 1000).toISOString()
+    }));
   })
 );
 
@@ -1008,6 +1105,13 @@ router.use(
     res: express.Response,
     next: express.NextFunction
   ) => {
+    if (error instanceof multer.MulterError) {
+      return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+        status: "error",
+        code: error.code === "LIMIT_FILE_SIZE" ? "document_too_large" : "invalid_document_upload",
+        message: error.message
+      });
+    }
     if (!error.statusCode) {
       return next(error);
     }
