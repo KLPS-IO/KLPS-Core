@@ -205,6 +205,13 @@ SQL migrations live in `server/sql` and are ordered by date. Apply them in filen
 20260702_waitlist_signups.sql
 20260707_finance_os.sql
 20260721_canonical_evidence.sql
+20260723_growth_os.sql
+```
+
+Migrations are applied manually in filename order. Run each migration transactionally:
+
+```bash
+psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 --file=<migration>
 ```
 
 Review migrations before applying them, take a backup for production changes, and never replace canonical records with seed or fabricated evidence.
