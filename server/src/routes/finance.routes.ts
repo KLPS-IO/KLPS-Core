@@ -12,6 +12,7 @@ import {
   logFinanceEvent,
   recalculateAndLog
 } from "../services/finance-engine.service";
+import { calculateExpenseMetrics } from "../services/current-costs.service";
 import { pool } from "../storage/postgres.client";
 import {
   createEvidence,
@@ -353,7 +354,8 @@ router.get(
         products: products.rows,
         hires: hires.rows,
         funding: funding.rows,
-        expenses: expenses.rows
+        expenses: expenses.rows,
+        expense_metrics: calculateExpenseMetrics(expenses.rows)
       })
     );
   })
