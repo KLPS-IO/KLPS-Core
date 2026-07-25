@@ -1,6 +1,27 @@
 -- Evidence-led current costs. This migration is intentionally not a forecast.
 -- Evidence UUIDs remain null until real canonical Evidence records are linked.
 
+BEGIN;
+
+DO $$
+BEGIN
+  IF to_regnamespace('finance_os') IS NULL THEN
+    RAISE EXCEPTION 'Required dependency is missing: schema finance_os';
+  END IF;
+  IF to_regclass('finance_os.evidence') IS NULL THEN
+    RAISE EXCEPTION 'Required dependency is missing: table finance_os.evidence';
+  END IF;
+  IF to_regclass('finance_os.evidence_links') IS NULL THEN
+    RAISE EXCEPTION 'Required dependency is missing: table finance_os.evidence_links';
+  END IF;
+  IF to_regprocedure('finance_os.set_updated_at()') IS NULL THEN
+    RAISE EXCEPTION 'Required dependency is missing: function finance_os.set_updated_at()';
+  END IF;
+  IF to_regclass('data_room.users') IS NULL THEN
+    RAISE EXCEPTION 'Required dependency is missing: table data_room.users';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS finance_os.expenses (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   import_key text NOT NULL UNIQUE,
@@ -48,6 +69,9 @@ CREATE TABLE IF NOT EXISTS finance_os.expenses (
   CHECK (net_amount IS NULL OR net_amount >= 0),
   CHECK (vat_amount IS NULL OR vat_amount >= 0),
   CHECK (gross_amount IS NULL OR gross_amount >= 0),
+  CHECK (supplier_cost_amount IS NULL OR supplier_cost_amount >= 0),
+  CHECK (recurring_run_rate_net IS NULL OR recurring_run_rate_net >= 0),
+  CHECK (klps_allocation_amount IS NULL OR klps_allocation_amount >= 0),
   CHECK (vat_rate IS NULL OR (vat_rate >= 0 AND vat_rate <= 1)),
   CHECK (recurring_run_rate_vat_rate IS NULL OR (recurring_run_rate_vat_rate >= 0 AND recurring_run_rate_vat_rate <= 1)),
   CHECK (klps_allocation_percentage IS NULL OR (klps_allocation_percentage >= 0 AND klps_allocation_percentage <= 1))
@@ -89,8 +113,7 @@ BEGIN
   )
   VALUES (
     OLD.id, OLD.version, to_jsonb(OLD), NEW.change_reason, NEW.updated_by
-  )
-  ON CONFLICT (expense_id, version) DO NOTHING;
+  );
   NEW.version := OLD.version + 1;
   RETURN NEW;
 END;
@@ -98,7 +121,9 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS expenses_capture_version ON finance_os.expenses;
 CREATE TRIGGER expenses_capture_version BEFORE UPDATE ON finance_os.expenses
-FOR EACH ROW EXECUTE FUNCTION finance_os.capture_expense_version();
+FOR EACH ROW
+WHEN (OLD IS DISTINCT FROM NEW)
+EXECUTE FUNCTION finance_os.capture_expense_version();
 
 CREATE INDEX IF NOT EXISTS idx_finance_expenses_date ON finance_os.expenses (transaction_date DESC);
 CREATE INDEX IF NOT EXISTS idx_finance_expenses_status ON finance_os.expenses (cost_type, current_status, evidence_status);
@@ -293,4 +318,69 @@ ON CONFLICT (import_key) DO UPDATE SET
   evidence_reference = EXCLUDED.evidence_reference,
   notes = EXCLUDED.notes,
   metadata = EXCLUDED.metadata,
-  change_reason = EXCLUDED.change_reason;
+  change_reason = EXCLUDED.change_reason
+WHERE (
+  finance_os.expenses.name,
+  finance_os.expenses.supplier_name,
+  finance_os.expenses.category,
+  finance_os.expenses.cost_type,
+  finance_os.expenses.frequency,
+  finance_os.expenses.transaction_date,
+  finance_os.expenses.service_period_start,
+  finance_os.expenses.service_period_end,
+  finance_os.expenses.net_amount,
+  finance_os.expenses.credit_adjustment,
+  finance_os.expenses.vat_amount,
+  finance_os.expenses.vat_rate,
+  finance_os.expenses.gross_amount,
+  finance_os.expenses.supplier_cost_amount,
+  finance_os.expenses.supplier_cost_basis,
+  finance_os.expenses.recurring_run_rate_net,
+  finance_os.expenses.recurring_run_rate_vat_rate,
+  finance_os.expenses.klps_allocation_amount,
+  finance_os.expenses.klps_allocation_percentage,
+  finance_os.expenses.current_status,
+  finance_os.expenses.paid_by,
+  finance_os.expenses.payment_channel,
+  finance_os.expenses.reimbursement_status,
+  finance_os.expenses.company_cash_outflow,
+  finance_os.expenses.business_expense_status,
+  finance_os.expenses.evidence_status,
+  finance_os.expenses.evidence_reference,
+  finance_os.expenses.notes,
+  finance_os.expenses.metadata,
+  finance_os.expenses.change_reason
+) IS DISTINCT FROM (
+  EXCLUDED.name,
+  EXCLUDED.supplier_name,
+  EXCLUDED.category,
+  EXCLUDED.cost_type,
+  EXCLUDED.frequency,
+  EXCLUDED.transaction_date,
+  EXCLUDED.service_period_start,
+  EXCLUDED.service_period_end,
+  EXCLUDED.net_amount,
+  EXCLUDED.credit_adjustment,
+  EXCLUDED.vat_amount,
+  EXCLUDED.vat_rate,
+  EXCLUDED.gross_amount,
+  EXCLUDED.supplier_cost_amount,
+  EXCLUDED.supplier_cost_basis,
+  EXCLUDED.recurring_run_rate_net,
+  EXCLUDED.recurring_run_rate_vat_rate,
+  EXCLUDED.klps_allocation_amount,
+  EXCLUDED.klps_allocation_percentage,
+  EXCLUDED.current_status,
+  EXCLUDED.paid_by,
+  EXCLUDED.payment_channel,
+  EXCLUDED.reimbursement_status,
+  EXCLUDED.company_cash_outflow,
+  EXCLUDED.business_expense_status,
+  EXCLUDED.evidence_status,
+  EXCLUDED.evidence_reference,
+  EXCLUDED.notes,
+  EXCLUDED.metadata,
+  EXCLUDED.change_reason
+);
+
+COMMIT;
