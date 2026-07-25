@@ -249,7 +249,8 @@ router.get(
       scenarios,
       products,
       hires,
-      funding
+      funding,
+      expenses
     ] = await Promise.all([
       pool.query(
         `
@@ -329,6 +330,13 @@ router.get(
         ORDER BY created_at DESC
         `,
         [scenario.id]
+      ),
+      pool.query(
+        `
+        SELECT *
+        FROM finance_os.expenses
+        ORDER BY transaction_date DESC NULLS LAST, created_at DESC
+        `
       )
     ]);
 
@@ -344,7 +352,8 @@ router.get(
         scenarios: scenarios.rows,
         products: products.rows,
         hires: hires.rows,
-        funding: funding.rows
+        funding: funding.rows,
+        expenses: expenses.rows
       })
     );
   })
