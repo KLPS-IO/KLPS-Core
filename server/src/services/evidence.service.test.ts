@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   createEvidence,
   getEvidence,
+  getExpenseEvidence,
   linkEvidence,
+  LINKED_ENTITY_TYPES,
   listEvidence,
   updateEvidence,
   validateEvidenceInput
@@ -11,6 +13,7 @@ import {
 import { requireFinanceWrite } from "../routes/finance.routes";
 import {
   buildDocumentStorage,
+  createOptionalUploadLink,
   parseDocumentUploadInput
 } from "./document-upload.service";
 
@@ -60,6 +63,19 @@ test("document upload linking is all-or-nothing", () => {
     linked_entity_type: "company", linked_entity_id: ENTITY_ID, relationship: "supports"
   });
   assert.equal(linked.relationship, "supports");
+});
+
+test("document upload accepts a complete canonical expense link", () => {
+  const linked = parseDocumentUploadInput({
+    title: "Supplier invoice",
+    document_category: "Finance",
+    linked_entity_type: "expense",
+    linked_entity_id: ENTITY_ID,
+    relationship: "Verifies supplier invoice and payment"
+  });
+  assert.equal(linked.linkedEntityType, "expense");
+  assert.equal(linked.linkedEntityId, ENTITY_ID);
+  assert.equal(linked.relationship, "Verifies supplier invoice and payment");
 });
 
 test("document storage naming follows the canonical Finance OS mapping", () => {
@@ -181,7 +197,7 @@ test("duplicate entity links return a conflict instead of updating the existing 
     throw Object.assign(new Error("duplicate"), { code: "23505" });
   }};
   await assert.rejects(
-    linkEvidence(EVIDENCE_ID, { entity_type: "assumption", entity_id: ENTITY_ID }, USER_ID, db as never),
+    linkEvidence(EVIDENCE_ID, { entity_type: "assumption", entity_id: ENTITY_ID, relationship: "supports" }, USER_ID, db as never),
     (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "duplicate_evidence_link" && (reason as { statusCode?: number }).statusCode === 409
   );
 });
@@ -193,7 +209,7 @@ test("missing linked entities are rejected", async () => {
     return call === 1 ? { rows: [{ id: EVIDENCE_ID }] } : { rows: [] };
   }};
   await assert.rejects(
-    linkEvidence(EVIDENCE_ID, { entity_type: "risk", entity_id: ENTITY_ID }, USER_ID, db as never),
+    linkEvidence(EVIDENCE_ID, { entity_type: "risk", entity_id: ENTITY_ID, relationship: "supports" }, USER_ID, db as never),
     (reason: unknown) => (reason as { code?: string }).code === "linked_entity_not_found"
   );
 });
@@ -206,7 +222,7 @@ test("company evidence links validate the canonical company target", async () =>
     if (queries.length === 2) return { rows: [{ id: ENTITY_ID }] };
     return { rows: [{ id: "44444444-4444-4444-8444-444444444444", entity_type: "company", entity_id: ENTITY_ID }] };
   }};
-  const link = await linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never);
+  const link = await linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID, relationship: "supports" }, USER_ID, db as never);
   assert.match(queries[1], /finance_os\.company/);
   assert.equal(link.entity_type, "company");
 });
@@ -218,7 +234,7 @@ test("missing company evidence targets return not found instead of unsupported",
     return call === 1 ? { rows: [{ id: EVIDENCE_ID }] } : { rows: [] };
   }};
   await assert.rejects(
-    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never),
+    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID, relationship: "supports" }, USER_ID, db as never),
     (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "linked_entity_not_found" && (reason as { statusCode?: number }).statusCode === 404
   );
 });
@@ -231,8 +247,136 @@ test("duplicate company evidence links return conflict", async () => {
     throw Object.assign(new Error("duplicate"), { code: "23505" });
   }};
   await assert.rejects(
-    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID }, USER_ID, db as never),
+    linkEvidence(EVIDENCE_ID, { entity_type: "company", entity_id: ENTITY_ID, relationship: "supports" }, USER_ID, db as never),
     (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "duplicate_evidence_link" && (reason as { statusCode?: number }).statusCode === 409
+  );
+});
+
+test("expense evidence links validate the canonical expense target", async () => {
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (queries.length === 1) return { rows: [{ id: EVIDENCE_ID }] };
+    if (queries.length === 2) return { rows: [{ id: ENTITY_ID }] };
+    return { rows: [{ id: "77777777-7777-4777-8777-777777777777", entity_type: "expense", entity_id: ENTITY_ID }] };
+  }};
+  const link = await linkEvidence(EVIDENCE_ID, {
+    entity_type: "expense",
+    entity_id: ENTITY_ID,
+    relationship: "Verifies supplier invoice and payment"
+  }, USER_ID, db as never);
+  assert.match(queries[1], /finance_os\.expenses/);
+  assert.equal(link.entity_type, "expense");
+});
+
+test("missing expense evidence targets return linked_entity_not_found", async () => {
+  let call = 0;
+  const db = { query: async () => ({ rows: ++call === 1 ? [{ id: EVIDENCE_ID }] : [] }) };
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, {
+      entity_type: "expense",
+      entity_id: ENTITY_ID,
+      relationship: "Verifies annual domain-registration cost"
+    }, USER_ID, db as never),
+    (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "linked_entity_not_found" &&
+      (reason as { statusCode?: number }).statusCode === 404
+  );
+});
+
+test("duplicate expense evidence links return conflict", async () => {
+  let call = 0;
+  const db = { query: async () => {
+    call += 1;
+    if (call <= 2) return { rows: [{ id: call === 1 ? EVIDENCE_ID : ENTITY_ID }] };
+    throw Object.assign(new Error("duplicate"), { code: "23505" });
+  }};
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, {
+      entity_type: "expense",
+      entity_id: ENTITY_ID,
+      relationship: "Supports prototype-material expenditure"
+    }, USER_ID, db as never),
+    (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "duplicate_evidence_link" &&
+      (reason as { statusCode?: number }).statusCode === 409
+  );
+});
+
+test("expense link validation rejects malformed ids and empty or oversized relationships", async () => {
+  const db = { query: async () => ({ rows: [] }) };
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, { entity_type: "expense", entity_id: "not-a-uuid", relationship: "supports" }, USER_ID, db as never),
+    /Invalid entity_id/
+  );
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, { entity_type: "expense", entity_id: ENTITY_ID, relationship: " " }, USER_ID, db as never),
+    /relationship is required/
+  );
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, { entity_type: "expense", entity_id: ENTITY_ID, relationship: "x".repeat(501) }, USER_ID, db as never),
+    /500 characters or fewer/
+  );
+});
+
+test("expense upload linking uses the existing link service and expense audit reason", async () => {
+  let call = 0;
+  let insertParams: unknown[] = [];
+  const db = { query: async (_sql: string, params?: unknown[]) => {
+    call += 1;
+    if (call === 1) return { rows: [{ id: EVIDENCE_ID }] };
+    if (call === 2) return { rows: [{ id: ENTITY_ID }] };
+    insertParams = params ?? [];
+    return { rows: [{ id: "77777777-7777-4777-8777-777777777777" }] };
+  }};
+  const input = parseDocumentUploadInput({
+    title: "Receipt",
+    document_category: "Finance",
+    linked_entity_type: "expense",
+    linked_entity_id: ENTITY_ID,
+    relationship: "Verifies supplier invoice and payment"
+  });
+  await createOptionalUploadLink(EVIDENCE_ID, input, USER_ID, db as never);
+  assert.equal(insertParams[2], ENTITY_ID);
+  assert.equal(insertParams[3], "Verifies supplier invoice and payment");
+  assert.equal(insertParams[6], "Linked during expense evidence upload");
+});
+
+test("expense evidence retrieval returns canonical linked records and no public URL", async () => {
+  const linkedRecord = {
+    id: EVIDENCE_ID,
+    evidence_code: "EVD-0042",
+    link_id: "77777777-7777-4777-8777-777777777777",
+    relationship: "Verifies supplier invoice and payment",
+    link_notes: null,
+    linked_at: "2026-07-26T10:00:00.000Z"
+  };
+  let call = 0;
+  const db = { query: async () => ({ rows: ++call === 1 ? [{ id: ENTITY_ID }] : [linkedRecord] }) };
+  const evidence = await getExpenseEvidence(ENTITY_ID, db as never);
+  assert.deepEqual(evidence, [linkedRecord]);
+  assert.equal("signed_url" in evidence[0], false);
+  assert.equal("public_url" in evidence[0], false);
+});
+
+test("expense evidence retrieval returns an empty array when the expense has no links", async () => {
+  let call = 0;
+  const db = { query: async () => ({ rows: ++call === 1 ? [{ id: ENTITY_ID }] : [] }) };
+  assert.deepEqual(await getExpenseEvidence(ENTITY_ID, db as never), []);
+});
+
+test("existing evidence entity types remain available while KPI stays unsupported", async () => {
+  assert.deepEqual(LINKED_ENTITY_TYPES, [
+    "assumption", "product", "decision", "risk", "company", "funding", "kpi",
+    "report", "scenario", "hire", "document", "expense"
+  ]);
+  const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID }] }) };
+  await assert.rejects(
+    linkEvidence(EVIDENCE_ID, {
+      entity_type: "kpi",
+      entity_id: ENTITY_ID,
+      relationship: "supports"
+    }, USER_ID, db as never),
+    (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "unsupported_evidence_entity" &&
+      (reason as { statusCode?: number }).statusCode === 422
   );
 });
 

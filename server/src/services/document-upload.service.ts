@@ -113,6 +113,8 @@ export const createOptionalUploadLink = async (evidenceId: string, input: Return
     entity_type: input.linkedEntityType,
     entity_id: input.linkedEntityId,
     relationship: input.relationship,
-    change_reason: "Linked during document upload"
+    change_reason: input.linkedEntityType === "expense"
+      ? "Linked during expense evidence upload"
+      : "Linked during document upload"
   }, userId, db);
 };

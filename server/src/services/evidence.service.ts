@@ -18,7 +18,7 @@ export const EVIDENCE_TYPES = [
 ] as const;
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
-  "report", "scenario", "hire", "document"
+  "report", "scenario", "hire", "document", "expense"
 ] as const;
 
 type Db = Pick<PoolClient, "query">;
@@ -51,6 +51,11 @@ const date = (value: unknown, field: string) => {
 const uuid = (value: unknown, field: string) => {
   const parsed = requiredText(value, field);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed)) throw error(`Invalid ${field}`);
+  return parsed;
+};
+const relationship = (value: unknown) => {
+  const parsed = requiredText(value, "relationship");
+  if (parsed.length > 500) throw error("relationship must be 500 characters or fewer");
   return parsed;
 };
 
@@ -147,19 +152,20 @@ const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>>
   assumption: "finance_os.assumptions", product: "finance_os.products", decision: "finance_os.decisions",
   risk: "finance_os.risks", funding: "finance_os.funding", report: "finance_os.reports",
   scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",
-  company: "finance_os.company"
+  company: "finance_os.company", expense: "finance_os.expenses"
 };
 
 export const linkEvidence = async (evidenceId: string, input: Input, userId: string, db: Db = pool) => {
   const entityType = enumValue(input.entity_type, "entity_type", LINKED_ENTITY_TYPES);
   const entityId = uuid(input.entity_id, "entity_id");
+  const linkRelationship = relationship(input.relationship);
   await getEvidence(evidenceId, db);
   const table = TARGET_TABLES[entityType];
   if (!table) throw error(`Entity type ${entityType} is reserved but has no canonical table`, "unsupported_evidence_entity", 422);
   const target = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [entityId]);
   if (!target.rows[0]) throw error("Linked entity not found", "linked_entity_not_found", 404);
   try {
-    const result = await db.query(`INSERT INTO finance_os.evidence_links (evidence_id, entity_type, entity_id, relationship, notes, created_by, updated_by, change_reason) VALUES ($1, $2, $3, $4, $5, $6, $6, $7) RETURNING *`, [evidenceId, entityType, entityId, text(input.relationship) ?? "supports", text(input.notes), userId, text(input.change_reason) ?? "Linked evidence"]);
+    const result = await db.query(`INSERT INTO finance_os.evidence_links (evidence_id, entity_type, entity_id, relationship, notes, created_by, updated_by, change_reason) VALUES ($1, $2, $3, $4, $5, $6, $6, $7) RETURNING *`, [evidenceId, entityType, entityId, linkRelationship, text(input.notes), userId, text(input.change_reason) ?? "Linked evidence"]);
     return result.rows[0];
   } catch (cause) {
     if ((cause as { code?: string }).code === "23505") throw error("Evidence link already exists", "duplicate_evidence_link", 409);
@@ -178,6 +184,13 @@ export const getLinkedEvidence = async (entityTypeValue: unknown, entityIdValue:
   const entityId = uuid(entityIdValue, "entity_id");
   const result = await db.query(`SELECT e.*, l.id AS link_id, l.relationship, l.notes AS link_notes, l.created_at AS linked_at FROM finance_os.evidence_links l JOIN finance_os.evidence e ON e.id = l.evidence_id WHERE l.entity_type = $1 AND l.entity_id = $2 ORDER BY l.created_at DESC`, [entityType, entityId]);
   return result.rows;
+};
+
+export const getExpenseEvidence = async (expenseIdValue: unknown, db: Db = pool) => {
+  const expenseId = uuid(expenseIdValue, "expense id");
+  const target = await db.query(`SELECT id FROM finance_os.expenses WHERE id = $1`, [expenseId]);
+  if (!target.rows[0]) throw error("Linked entity not found", "linked_entity_not_found", 404);
+  return getLinkedEvidence("expense", expenseId, db);
 };
 
 export const getEvidenceVersions = async (id: string, db: Db = pool) => {

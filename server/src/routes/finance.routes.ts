@@ -17,6 +17,7 @@ import { pool } from "../storage/postgres.client";
 import {
   createEvidence,
   getEvidence,
+  getExpenseEvidence,
   getEvidenceVersions,
   getLinkedEvidence,
   linkEvidence,
@@ -334,9 +335,27 @@ router.get(
       ),
       pool.query(
         `
-        SELECT *
-        FROM finance_os.expenses
-        ORDER BY transaction_date DESC NULLS LAST, created_at DESC
+        SELECT expense.*,
+          COALESCE(expense_evidence.evidence_count, 0)::int AS evidence_count,
+          COALESCE(expense_evidence.evidence_status_summary, '{}'::jsonb) AS evidence_status_summary
+        FROM finance_os.expenses expense
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(sum(status_group.status_count), 0)::int AS evidence_count,
+            COALESCE(
+              jsonb_object_agg(status_group.verification_status, status_group.status_count),
+              '{}'::jsonb
+            ) AS evidence_status_summary
+          FROM (
+            SELECT evidence.verification_status, count(DISTINCT evidence.id)::int AS status_count
+            FROM finance_os.evidence_links link
+            JOIN finance_os.evidence evidence ON evidence.id = link.evidence_id
+            WHERE link.entity_type = 'expense'
+              AND link.entity_id = expense.id
+            GROUP BY evidence.verification_status
+          ) status_group
+        ) expense_evidence ON TRUE
+        ORDER BY expense.transaction_date DESC NULLS LAST, expense.created_at DESC
         `
       )
     ]);
@@ -547,6 +566,14 @@ router.post(
       req.dataRoomUser!.id
     );
     return res.status(201).json(jsonOk({ evidence }));
+  })
+);
+
+router.get(
+  "/expenses/:id/evidence",
+  asyncHandler(async (req, res) => {
+    const evidence = await getExpenseEvidence(getParam(req.params.id));
+    return res.json(jsonOk({ evidence }));
   })
 );
 
