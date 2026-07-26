@@ -168,6 +168,7 @@ POST /api/data-room/admin/documents
   "access_level": "investor_nda",
   "watermark_required": true
 }
+
 ```
 
 Founder/admin should also be able to patch metadata and deactivate documents:
