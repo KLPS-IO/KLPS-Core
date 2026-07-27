@@ -53,6 +53,7 @@ export async function updateWp1(input:Record<string,unknown>,userId:string,db:Db
   const values:Record<string,unknown>={};for(const [k,v]of Object.entries(input))values[k]=parse(k,allowed[k as keyof typeof allowed],v);
   if(!values.change_reason||String(values.change_reason).length<5)throw fail("A meaningful change_reason is required");if(values.status&&!wpStatuses.includes(values.status as never))throw fail("Invalid status");
   const current=await db.query(`SELECT * FROM rd_lab.work_packages WHERE code='WP1' FOR UPDATE`);if(!current.rows[0])throw fail("WP1 not found","wp1_not_found",404);
+  await db.query(`INSERT INTO rd_lab.record_versions(entity_type,entity_id,version,snapshot,change_reason,created_by) VALUES('work_packages',$1,$2,$3,$4,$5)`,[current.rows[0].id,current.rows[0].version,current.rows[0],values.change_reason,userId]);
   const names=Object.keys(values);const params=names.map(k=>values[k]);params.push(userId,current.rows[0].id);
   const result=await db.query(`UPDATE rd_lab.work_packages SET ${names.map((k,i)=>`${k}=$${i+1}`).join(",")},updated_by=$${names.length+1},version=version+1 WHERE id=$${names.length+2} RETURNING *`,params);return result.rows[0];
 }
@@ -75,7 +76,7 @@ export async function summary(wpId:string,db:Db=pool){
   const r=await db.query(`SELECT
   (SELECT count(*)::int FROM rd_lab.suppliers WHERE work_package_id=$1) suppliers_identified,
   (SELECT count(*)::int FROM rd_lab.suppliers WHERE work_package_id=$1 AND procurement_status IN('Contacted','Meeting Booked','Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Selected')) suppliers_contacted,
-  (SELECT count(*)::int FROM rd_lab.interactions WHERE work_package_id=$1) meetings_held,
+  (SELECT count(*)::int FROM rd_lab.interactions WHERE work_package_id=$1 AND lower(interaction_type) LIKE '%meeting%') meetings_held,
   (SELECT count(*)::int FROM rd_lab.rfqs WHERE work_package_id=$1 AND status NOT IN('Draft','Ready')) rfqs_sent,
   (SELECT count(*)::int FROM rd_lab.quotations WHERE work_package_id=$1) quotations_received,
   (SELECT count(*)::int FROM rd_lab.action_items WHERE work_package_id=$1 AND status NOT IN('Complete','Cancelled')) open_actions,
