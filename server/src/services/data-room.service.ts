@@ -372,13 +372,14 @@ export const verifyLoginOtp = async (
 
 export const createSession = async (
   req: Request,
-  user: DataRoomUser
+  user: DataRoomUser,
+  ttlMs = SESSION_TTL_MS
 ) => {
   const token =
     crypto.randomBytes(32).toString("base64url");
 
   const expiresAt =
-    new Date(Date.now() + SESSION_TTL_MS);
+    new Date(Date.now() + ttlMs);
 
   const result = await pool.query(
     `

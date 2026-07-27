@@ -18,7 +18,8 @@ export const EVIDENCE_TYPES = [
 ] as const;
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
-  "report", "scenario", "hire", "document", "expense"
+  "report", "scenario", "hire", "document", "expense",
+  "rd_work_package", "rd_supplier", "rd_rfq", "rd_quotation"
 ] as const;
 
 type Db = Pick<PoolClient, "query">;
@@ -152,7 +153,9 @@ const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>>
   assumption: "finance_os.assumptions", product: "finance_os.products", decision: "finance_os.decisions",
   risk: "finance_os.risks", funding: "finance_os.funding", report: "finance_os.reports",
   scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",
-  company: "finance_os.company", expense: "finance_os.expenses"
+  company: "finance_os.company", expense: "finance_os.expenses",
+  rd_work_package: "rd_lab.work_packages", rd_supplier: "rd_lab.suppliers",
+  rd_rfq: "rd_lab.rfqs", rd_quotation: "rd_lab.quotations"
 };
 
 export const linkEvidence = async (evidenceId: string, input: Input, userId: string, db: Db = pool) => {

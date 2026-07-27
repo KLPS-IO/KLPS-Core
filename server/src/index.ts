@@ -10,6 +10,7 @@ import dataRoomRoutes from "./routes/data-room.routes";
 import financeRoutes from "./routes/finance.routes";
 import waitlistRoutes from "./routes/waitlist.routes";
 import growthRoutes from "./growth/growth.routes";
+import rdLabRoutes from "./rd-lab/rd-lab.routes";
 import {
   getSessionUser,
   hasAcceptedCurrentNda,
@@ -203,6 +204,7 @@ app.use(
 app.use("/api/data-room", dataRoomRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/growth", growthRoutes);
+app.use("/api/rd-lab", rdLabRoutes);
 app.use("/api/research", researchRoutes);
 
 app.get("/api/auth/me", async (req, res) => {

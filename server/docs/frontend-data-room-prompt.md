@@ -167,7 +167,13 @@ POST /api/data-room/admin/documents
   "sort_order": 10,
   "access_level": "investor_nda",
   "watermark_required": true
-}
+}SELECT
+    age_range,
+    COUNT(*) AS respondents,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (),2) AS percentage
+FROM public.survey_responses
+GROUP BY age_range
+ORDER BY respondents DESC;
 ```
 
 Founder/admin should also be able to patch metadata and deactivate documents:
