@@ -366,7 +366,8 @@ test("expense evidence retrieval returns an empty array when the expense has no 
 test("existing evidence entity types remain available while KPI stays unsupported", async () => {
   assert.deepEqual(LINKED_ENTITY_TYPES, [
     "assumption", "product", "decision", "risk", "company", "funding", "kpi",
-    "report", "scenario", "hire", "document", "expense"
+    "report", "scenario", "hire", "document", "expense", "rd_work_package",
+    "rd_supplier", "rd_rfq", "rd_quotation"
   ]);
   const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID }] }) };
   await assert.rejects(
