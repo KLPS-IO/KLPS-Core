@@ -9,6 +9,7 @@ import {
   summary, updateRecord, updateWp1
 } from "./rd-lab.service";
 import { pool } from "../storage/postgres.client";
+import { calculateProcurementProgress } from "./procurement-progress.service";
 
 const router=express.Router();
 const asyncHandler=(fn:(req:DataRoomRequest,res:express.Response)=>Promise<unknown>)=>
@@ -33,6 +34,10 @@ router.use(requireDataRoomAuth,(req:DataRoomRequest,res,next)=>{try{requireRdFou
 router.get("/work-packages/wp1",asyncHandler(async(_req,res)=>res.json({status:"success",work_package:await getWp1()})));
 router.patch("/work-packages/wp1",asyncHandler(async(req,res)=>res.json({status:"success",work_package:await updateWp1(req.body??{},req.dataRoomUser!.id)})));
 router.get("/work-packages/wp1/summary",asyncHandler(async(_req,res)=>{const wp=await getWp1();return res.json({status:"success",summary:await summary(wp.id)});}));
+router.get("/work-packages/:id/procurement-progress",asyncHandler(async(req,res)=>res.json({
+  status:"success",
+  procurement_progress:await calculateProcurementProgress(String(req.params.id))
+})));
 for(const resource of Object.keys(RD_RESOURCES) as RdResource[]){
   router.get(`/${resource}`,asyncHandler(async(req,res)=>{const wp=await getWp1();return res.json({status:"success",[resource]:await listRecords(resource,wp.id,req.query as Record<string,unknown>)});}));
   router.post(`/${resource}`,asyncHandler(async(req,res)=>res.status(201).json({status:"success",record:await createRecord(resource,req.body??{},req.dataRoomUser!.id)})));
