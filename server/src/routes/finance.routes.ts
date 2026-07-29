@@ -16,12 +16,14 @@ import { calculateExpenseMetrics } from "../services/current-costs.service";
 import { pool } from "../storage/postgres.client";
 import {
   createEvidence,
+  deleteEvidenceEverywhere,
   getEvidence,
   getExpenseEvidence,
   getEvidenceVersions,
   getLinkedEvidence,
   linkEvidence,
   listEvidence,
+  reorderEvidenceLinks,
   unlinkEvidence,
   updateEvidence
 } from "../services/evidence.service";
@@ -724,11 +726,69 @@ router.delete(
   "/evidence/:id/links/:linkId",
   requireFinanceWrite,
   asyncHandler(async (req, res) => {
-    const link = await unlinkEvidence(
-      getParam(req.params.id),
-      getParam(req.params.linkId)
-    );
-    return res.json(jsonOk({ link }));
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await unlinkEvidence(
+        getParam(req.params.id),
+        getParam(req.params.linkId),
+        client
+      );
+      if (result.r2_object_key) await deleteFromR2(result.r2_object_key);
+      await client.query("COMMIT");
+      return res.json(jsonOk(result));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.put(
+  "/evidence-links/order",
+  requireFinanceWrite,
+  asyncHandler(async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const links = await reorderEvidenceLinks(req.body ?? {}, req.dataRoomUser!.id, client);
+      await client.query("COMMIT");
+      return res.json(jsonOk({ links }));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.delete(
+  "/evidence/:id",
+  requireFinanceWrite,
+  asyncHandler(async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await deleteEvidenceEverywhere(
+        getParam(req.params.id),
+        req.body?.confirmation,
+        client
+      );
+      if (result.r2_object_key) await deleteFromR2(result.r2_object_key);
+      await client.query("COMMIT");
+      return res.json(jsonOk({
+        evidence_id: result.evidence_id,
+        deleted_link_count: result.deleted_link_count
+      }));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 

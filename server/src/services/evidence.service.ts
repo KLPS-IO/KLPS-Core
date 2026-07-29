@@ -59,6 +59,12 @@ const relationship = (value: unknown) => {
   if (parsed.length > 500) throw error("relationship must be 500 characters or fewer");
   return parsed;
 };
+const uniqueUuids = (value: unknown, field: string) => {
+  if (!Array.isArray(value) || value.length === 0) throw error(`${field} is required`);
+  const parsed = value.map((item, index) => uuid(item, `${field}[${index}]`));
+  if (new Set(parsed).size !== parsed.length) throw error(`${field} contains duplicate links`);
+  return parsed;
+};
 
 export const validateEvidenceInput = (input: Input, partial = false) => {
   const backendManaged = ["folder_path", "r2_object_key", "evidence_code", "file_version", "storage_provider", "original_filename", "mime_type", "file_size", "checksum"]
@@ -168,7 +174,7 @@ export const linkEvidence = async (evidenceId: string, input: Input, userId: str
   const target = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [entityId]);
   if (!target.rows[0]) throw error("Linked entity not found", "linked_entity_not_found", 404);
   try {
-    const result = await db.query(`INSERT INTO finance_os.evidence_links (evidence_id, entity_type, entity_id, relationship, notes, created_by, updated_by, change_reason) VALUES ($1, $2, $3, $4, $5, $6, $6, $7) RETURNING *`, [evidenceId, entityType, entityId, linkRelationship, text(input.notes), userId, text(input.change_reason) ?? "Linked evidence"]);
+    const result = await db.query(`INSERT INTO finance_os.evidence_links (evidence_id, entity_type, entity_id, relationship, notes, display_order, created_by, updated_by, change_reason) VALUES ($1, $2, $3, $4, $5, COALESCE((SELECT MAX(display_order) + 100 FROM finance_os.evidence_links WHERE entity_type = $2 AND entity_id = $3), 100), $6, $6, $7) RETURNING *`, [evidenceId, entityType, entityId, linkRelationship, text(input.notes), userId, text(input.change_reason) ?? "Linked evidence"]);
     return result.rows[0];
   } catch (cause) {
     if ((cause as { code?: string }).code === "23505") throw error("Evidence link already exists", "duplicate_evidence_link", 409);
@@ -176,16 +182,99 @@ export const linkEvidence = async (evidenceId: string, input: Input, userId: str
   }
 };
 
+export const reorderEvidenceLinks = async (input: Input, userId: string, db: Db = pool) => {
+  const entityType = enumValue(input.entity_type, "entity_type", LINKED_ENTITY_TYPES);
+  const entityId = uuid(input.entity_id, "entity_id");
+  const orderedLinkIds = uniqueUuids(input.ordered_link_ids, "ordered_link_ids");
+  const current = await db.query(
+    `SELECT id FROM finance_os.evidence_links WHERE entity_type = $1 AND entity_id = $2 AND hidden = false ORDER BY display_order, created_at, id FOR UPDATE`,
+    [entityType, entityId]
+  );
+  const currentIds = current.rows.map((row: { id: string }) => row.id);
+  if (
+    currentIds.length !== orderedLinkIds.length ||
+    currentIds.some((id: string) => !orderedLinkIds.includes(id))
+  ) {
+    throw error("Evidence links changed while reordering. Reload and try again.", "stale_evidence_order", 409);
+  }
+  const result = await db.query(
+    `UPDATE finance_os.evidence_links AS evidence_link
+     SET display_order = ordered_position.display_order,
+         updated_at = now(),
+         updated_by = $1,
+         version = evidence_link.version + 1,
+         change_reason = 'Reordered linked evidence'
+     FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered_position(id, display_order)
+     WHERE evidence_link.id = ordered_position.id
+       AND evidence_link.entity_type = $3
+       AND evidence_link.entity_id = $4
+       AND evidence_link.hidden = false
+     RETURNING evidence_link.id, evidence_link.display_order`,
+    [userId, orderedLinkIds, entityType, entityId]
+  );
+  return result.rows;
+};
+
 export const unlinkEvidence = async (evidenceId: string, linkId: string, db: Db = pool) => {
-  const result = await db.query(`DELETE FROM finance_os.evidence_links WHERE id = $1 AND evidence_id = $2 RETURNING *`, [uuid(linkId, "link id"), uuid(evidenceId, "evidence id")]);
-  if (!result.rows[0]) throw error("Evidence link not found", "evidence_link_not_found", 404);
-  return result.rows[0];
+  const canonicalEvidenceId = uuid(evidenceId, "evidence id");
+  const canonicalLinkId = uuid(linkId, "link id");
+  const evidenceResult = await db.query(
+    `SELECT id, r2_object_key FROM finance_os.evidence WHERE id = $1 FOR UPDATE`,
+    [canonicalEvidenceId]
+  );
+  if (!evidenceResult.rows[0]) throw error("Evidence not found", "evidence_not_found", 404);
+  const links = await db.query(
+    `SELECT * FROM finance_os.evidence_links WHERE evidence_id = $1 ORDER BY created_at FOR UPDATE`,
+    [canonicalEvidenceId]
+  );
+  const selectedLink = links.rows.find((link: { id: string }) => link.id === canonicalLinkId);
+  if (!selectedLink) throw error("Evidence link not found", "evidence_link_not_found", 404);
+  if (links.rows.length > 1) {
+    await db.query(`DELETE FROM finance_os.evidence_links WHERE id = $1`, [canonicalLinkId]);
+    return {
+      link: selectedLink,
+      evidence_deleted: false,
+      remaining_link_count: links.rows.length - 1,
+      r2_object_key: null
+    };
+  }
+  await db.query(`SELECT set_config('klps.allow_canonical_evidence_delete', 'on', true)`);
+  await db.query(`DELETE FROM finance_os.evidence WHERE id = $1`, [canonicalEvidenceId]);
+  return {
+    link: selectedLink,
+    evidence_deleted: true,
+    remaining_link_count: 0,
+    r2_object_key: evidenceResult.rows[0].r2_object_key ?? null
+  };
+};
+
+export const deleteEvidenceEverywhere = async (evidenceId: string, confirmation: unknown, db: Db = pool) => {
+  if (confirmation !== "DELETE EVERYWHERE") {
+    throw error("Explicit delete-everywhere confirmation is required", "evidence_delete_confirmation_required", 400);
+  }
+  const canonicalEvidenceId = uuid(evidenceId, "evidence id");
+  const evidenceResult = await db.query(
+    `SELECT id, r2_object_key FROM finance_os.evidence WHERE id = $1 FOR UPDATE`,
+    [canonicalEvidenceId]
+  );
+  if (!evidenceResult.rows[0]) throw error("Evidence not found", "evidence_not_found", 404);
+  const links = await db.query(
+    `SELECT id FROM finance_os.evidence_links WHERE evidence_id = $1 FOR UPDATE`,
+    [canonicalEvidenceId]
+  );
+  await db.query(`SELECT set_config('klps.allow_canonical_evidence_delete', 'on', true)`);
+  await db.query(`DELETE FROM finance_os.evidence WHERE id = $1`, [canonicalEvidenceId]);
+  return {
+    evidence_id: canonicalEvidenceId,
+    deleted_link_count: links.rows.length,
+    r2_object_key: evidenceResult.rows[0].r2_object_key ?? null
+  };
 };
 
 export const getLinkedEvidence = async (entityTypeValue: unknown, entityIdValue: unknown, db: Db = pool) => {
   const entityType = enumValue(entityTypeValue, "entity_type", LINKED_ENTITY_TYPES);
   const entityId = uuid(entityIdValue, "entity_id");
-  const result = await db.query(`SELECT e.*, l.id AS link_id, l.relationship, l.notes AS link_notes, l.created_at AS linked_at FROM finance_os.evidence_links l JOIN finance_os.evidence e ON e.id = l.evidence_id WHERE l.entity_type = $1 AND l.entity_id = $2 ORDER BY l.created_at DESC`, [entityType, entityId]);
+  const result = await db.query(`SELECT e.*, l.id AS link_id, l.relationship, l.notes AS link_notes, l.created_at AS linked_at, l.display_order, l.pinned, l.hidden FROM finance_os.evidence_links l JOIN finance_os.evidence e ON e.id = l.evidence_id WHERE l.entity_type = $1 AND l.entity_id = $2 AND l.hidden = false ORDER BY l.display_order, l.created_at, l.id`, [entityType, entityId]);
   return result.rows;
 };
 

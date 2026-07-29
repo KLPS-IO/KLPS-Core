@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createEvidence,
+  deleteEvidenceEverywhere,
   getEvidence,
   getExpenseEvidence,
   linkEvidence,
   LINKED_ENTITY_TYPES,
   listEvidence,
+  reorderEvidenceLinks,
+  unlinkEvidence,
   updateEvidence,
   validateEvidenceInput
 } from "./evidence.service";
@@ -361,6 +364,84 @@ test("expense evidence retrieval returns an empty array when the expense has no 
   let call = 0;
   const db = { query: async () => ({ rows: ++call === 1 ? [{ id: ENTITY_ID }] : [] }) };
   assert.deepEqual(await getExpenseEvidence(ENTITY_ID, db as never), []);
+});
+
+test("linked evidence uses relationship display order and returns presentation metadata", async () => {
+  const queries: string[] = [];
+  await getExpenseEvidence(ENTITY_ID, {
+    query: async (sql: string) => {
+      queries.push(sql);
+      return { rows: queries.length === 1 ? [{ id: ENTITY_ID }] : [] };
+    }
+  } as never);
+  assert.match(queries[1], /l\.display_order, l\.pinned, l\.hidden/);
+  assert.match(queries[1], /ORDER BY l\.display_order/);
+});
+
+test("manual evidence reorder validates the complete relationship set", async () => {
+  const firstLink = "44444444-4444-4444-8444-444444444444";
+  const secondLink = "55555555-5555-4555-8555-555555555555";
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (queries.length === 1) return { rows: [{ id: firstLink }, { id: secondLink }] };
+    return { rows: [{ id: secondLink, display_order: 1 }, { id: firstLink, display_order: 2 }] };
+  }};
+  const rows = await reorderEvidenceLinks({
+    entity_type: "rd_supplier",
+    entity_id: ENTITY_ID,
+    ordered_link_ids: [secondLink, firstLink]
+  }, USER_ID, db as never);
+  assert.equal(rows.length, 2);
+  assert.match(queries[0], /FOR UPDATE/);
+  assert.match(queries[1], /WITH ORDINALITY/);
+  await assert.rejects(
+    reorderEvidenceLinks({
+      entity_type: "rd_supplier",
+      entity_id: ENTITY_ID,
+      ordered_link_ids: [firstLink]
+    }, USER_ID, { query: async () => ({ rows: [{ id: firstLink }, { id: secondLink }] }) } as never),
+    (reason: unknown) => (reason as { code?: string }).code === "stale_evidence_order"
+  );
+});
+
+test("unlink removes only the selected relationship when evidence is shared", async () => {
+  const linkId = "44444444-4444-4444-8444-444444444444";
+  const otherLinkId = "55555555-5555-4555-8555-555555555555";
+  let call = 0;
+  const db = { query: async () => {
+    call += 1;
+    if (call === 1) return { rows: [{ id: EVIDENCE_ID, r2_object_key: "evidence.pdf" }] };
+    if (call === 2) return { rows: [{ id: linkId }, { id: otherLinkId }] };
+    return { rows: [] };
+  }};
+  const result = await unlinkEvidence(EVIDENCE_ID, linkId, db as never);
+  assert.equal(result.evidence_deleted, false);
+  assert.equal(result.remaining_link_count, 1);
+  assert.equal(result.r2_object_key, null);
+});
+
+test("unlinking the final relationship deletes the canonical record in the controlled transaction", async () => {
+  const linkId = "44444444-4444-4444-8444-444444444444";
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (queries.length === 1) return { rows: [{ id: EVIDENCE_ID, r2_object_key: "evidence.pdf" }] };
+    if (queries.length === 2) return { rows: [{ id: linkId }] };
+    return { rows: [] };
+  }};
+  const result = await unlinkEvidence(EVIDENCE_ID, linkId, db as never);
+  assert.equal(result.evidence_deleted, true);
+  assert.equal(result.r2_object_key, "evidence.pdf");
+  assert.match(queries[2], /allow_canonical_evidence_delete/);
+  assert.match(queries[3], /DELETE FROM finance_os\.evidence/);
+});
+
+test("delete everywhere requires exact explicit confirmation", async () => {
+  await assert.rejects(
+    deleteEvidenceEverywhere(EVIDENCE_ID, "delete", { query: async () => ({ rows: [] }) } as never),
+    (reason: unknown) => (reason as { code?: string }).code === "evidence_delete_confirmation_required"
+  );
 });
 
 test("existing evidence entity types remain available while KPI stays unsupported", async () => {
