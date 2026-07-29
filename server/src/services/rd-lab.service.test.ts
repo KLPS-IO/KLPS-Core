@@ -27,9 +27,14 @@ test("supplier validation rejects bad URL and accepts controlled values", () => 
   }), /valid HTTP URL/);
   const value=validateRdPayload("suppliers", {
     work_package_id:"33333333-3333-4333-8333-333333333333", organisation_name:"Supplier",
-    category:"Graphene Material Specialist", procurement_status:"Researching", change_reason:"Initial research"
+    category:"Graphene Material Specialist", procurement_status:"Research", change_reason:"Initial research"
   });
-  assert.equal(value.procurement_status,"Researching");
+  assert.equal(value.procurement_status,"Research");
+  assert.deepEqual(validateRdPayload("suppliers", {
+    work_package_id:"33333333-3333-4333-8333-333333333333", organisation_name:"Supplier",
+    organisation_aliases:["Supplier Labs","SL"], category:"Graphene Material Specialist",
+    source_reference:"https://example.com/supplier", procurement_status:"Verified", change_reason:"Verified identity"
+  }).organisation_aliases,["Supplier Labs","SL"]);
 });
 
 test("contacts reject invalid email and updates require a change reason", () => {
@@ -56,6 +61,20 @@ test("migration seeds only WP1 and adds R&D evidence targets without suppliers",
   assert.match(sql,/INSERT INTO rd_lab\.work_packages/);
   assert.doesNotMatch(sql,/INSERT INTO rd_lab\.suppliers/);
   assert.match(sql,/rd_work_package.*rd_supplier.*rd_rfq.*rd_quotation/s);
+});
+
+test("approved supplier sprint migration contains only the four verified identities and no capability claims", () => {
+  const sql=readFileSync(join(process.cwd(),"server/sql/20260728_wp1_supplier_verification_sprint.sql"),"utf8");
+  for(const supplier of [
+    "The University of Manchester",
+    "Henry Royce Institute",
+    "Interactive Wear AG",
+    "Ohmatex A/S"
+  ]) assert.match(sql,new RegExp(supplier));
+  assert.doesNotMatch(sql,/paid_feasibility_status\s*,/);
+  assert.doesNotMatch(sql,/relevant_capability\s*,/);
+  assert.match(sql,/Ohmatex was bankrupt/);
+  assert.match(sql,/ON CONFLICT DO NOTHING/);
 });
 
 test("routes use canonical sessions, generic credentials errors, and rate limiting", () => {

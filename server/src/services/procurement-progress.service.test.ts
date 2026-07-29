@@ -9,7 +9,7 @@ import {
 const WP_ID = "33333333-3333-4333-8333-333333333333";
 const empty = {
   work_package_status: "Supplier Discovery",
-  suppliers_identified: 0, suppliers_shortlisted: 0, suppliers_contacted: 0,
+  suppliers_identified: 0, suppliers_verified: 0, suppliers_shortlisted: 0, suppliers_contacted: 0,
   suppliers_discovery_complete: 0, suppliers_selected: 0, interactions_count: 0,
   discovery_meetings_completed: 0, rfqs_total: 0, rfqs_draft_or_ready: 0,
   rfqs_sent: 0, rfqs_response_received: 0, rfqs_terminal: 0,
@@ -33,22 +33,22 @@ test("empty work package starts at Research without a percentage", () => {
   assert.equal(JSON.stringify(result).includes("percentage"), false);
 });
 
-test("research progresses and becomes ready when a supplier is shortlisted", () => {
+test("research progresses and becomes ready when a supplier is verified", () => {
   assert.equal(stage(progress({ suppliers_identified: 2 }), "research").state, "In Progress");
-  const shortlisted = progress({ suppliers_identified: 2, suppliers_shortlisted: 1 });
-  assert.equal(stage(shortlisted, "research").state, "Ready");
-  assert.equal(shortlisted.next_action, "Contact the first shortlisted supplier");
+  const verified = progress({ suppliers_identified: 2, suppliers_verified: 1 });
+  assert.equal(stage(verified, "research").state, "Ready");
+  assert.equal(verified.next_action, "Contact the first verified supplier");
 });
 
 test("supplier contact and discovery drive engagement without fabricated targets", () => {
   const contacted = progress({
-    suppliers_identified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1
+    suppliers_identified: 1, suppliers_verified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1
   });
   assert.equal(stage(contacted, "research").state, "Complete");
   assert.equal(stage(contacted, "supplier_engagement").state, "In Progress");
   assert.equal(contacted.next_action, "Book the first supplier discovery meeting");
   const discovery = progress({
-    suppliers_identified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1,
+    suppliers_identified: 1, suppliers_verified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1,
     suppliers_discovery_complete: 1, discovery_meetings_completed: 1
   });
   assert.equal(stage(discovery, "supplier_engagement").state, "Ready");
@@ -57,7 +57,7 @@ test("supplier contact and discovery drive engagement without fabricated targets
 
 test("RFQ draft, sent and response states are derived canonically", () => {
   const base = {
-    suppliers_identified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1,
+    suppliers_identified: 1, suppliers_verified: 1, suppliers_shortlisted: 1, suppliers_contacted: 1,
     suppliers_discovery_complete: 1
   };
   const draft = progress({ ...base, rfqs_total: 1, rfqs_draft_or_ready: 1 });
@@ -74,7 +74,7 @@ test("RFQ draft, sent and response states are derived canonically", () => {
 
 test("one valid quotation is ready while two suppliers make comparison meaningful", () => {
   const one = progress({
-    suppliers_identified: 2, suppliers_shortlisted: 2, suppliers_contacted: 1,
+    suppliers_identified: 2, suppliers_verified: 2, suppliers_shortlisted: 2, suppliers_contacted: 1,
     suppliers_discovery_complete: 1, rfqs_total: 1, rfqs_sent: 1,
     rfqs_response_received: 1, quotations_received: 1, valid_quotations: 1,
     valid_quotation_suppliers: 1
@@ -140,7 +140,7 @@ test("Finance OS mapping distinguishes ready from terminal", () => {
 
 test("critical actions block final completion", () => {
   const result = progress({
-    work_package_status: "Validated", suppliers_identified: 2,
+    work_package_status: "Validated", suppliers_identified: 2, suppliers_verified: 2,
     suppliers_shortlisted: 2, suppliers_contacted: 1, suppliers_discovery_complete: 1,
     rfqs_total: 2, rfqs_sent: 2, rfqs_response_received: 2, rfqs_terminal: 2,
     quotations_received: 2, valid_quotations: 2, valid_quotation_suppliers: 2,
@@ -155,7 +155,7 @@ test("critical actions block final completion", () => {
 
 test("validated work package completes only with pathway, decision, mapping and evidence", () => {
   const result = progress({
-    work_package_status: "Validated", suppliers_identified: 2,
+    work_package_status: "Validated", suppliers_identified: 2, suppliers_verified: 2,
     suppliers_shortlisted: 2, suppliers_contacted: 1, suppliers_discovery_complete: 1,
     rfqs_total: 2, rfqs_sent: 2, rfqs_response_received: 2, rfqs_terminal: 2,
     quotations_received: 2, valid_quotations: 2, valid_quotation_suppliers: 2,

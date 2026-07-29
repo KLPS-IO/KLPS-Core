@@ -3,16 +3,16 @@ import { pool } from "../storage/postgres.client";
 import { toFiniteMoney } from "../services/current-costs.service";
 
 type Db = Pick<PoolClient, "query">;
-type Kind = "text" | "date" | "timestamp" | "boolean" | "money" | "uuid" | "email" | "url";
+type Kind = "text" | "text_array" | "date" | "timestamp" | "boolean" | "money" | "uuid" | "email" | "url";
 type Config = { table: string; fields: Record<string, Kind>; required: string[]; enums?: Record<string, readonly string[]>; order?: string };
 const wpStatuses = ['Draft','Research','Supplier Discovery','Discovery Meetings','RFQ Preparation','RFQ Issued','Quotes Received','Evaluation','Supplier Selected','In Delivery','Validated','Paused','Closed'] as const;
-const supplierStatuses = ['Researching','Longlisted','Shortlisted','Contacted','Meeting Booked','Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Declined','Not Suitable','Selected','Reserve'] as const;
+const supplierStatuses = ['Research','Verified','Contacted','Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected','Closed'] as const;
 const rfqStatuses = ['Draft','Ready','Sent','Acknowledged','Clarification','Response Received','Declined','Closed'] as const;
 const actionStatuses = ['To Do','In Progress','Waiting','Blocked','Complete','Cancelled'] as const;
 const baseAudit = { change_reason: "text" as Kind };
 
 export const RD_RESOURCES = {
-  suppliers: { table: "suppliers", required: ["work_package_id","organisation_name","category","change_reason"], order: "created_at DESC", fields: { work_package_id:"uuid",organisation_name:"text",category:"text",organisation_type:"text",country:"text",website:"url",summary:"text",relevant_capability:"text",commercial_services_status:"text",paid_feasibility_status:"text",sme_support_status:"text",existing_relationship:"text",priority_tier:"text",procurement_status:"text",source_reference:"text",research_notes:"text",...baseAudit }, enums: { procurement_status:supplierStatuses, category:['Academic & Research Organisation','Commercial Smart Textile Developer','Conductive Textile & Fibre Supplier','Graphene Material Specialist','Printed Electronics Specialist','Textile Testing Laboratory','Prototype Integration Partner'] } },
+  suppliers: { table: "suppliers", required: ["work_package_id","organisation_name","category","change_reason"], order: "created_at DESC", fields: { work_package_id:"uuid",organisation_name:"text",organisation_aliases:"text_array",category:"text",organisation_type:"text",country:"text",website:"url",summary:"text",relevant_capability:"text",commercial_services_status:"text",paid_feasibility_status:"text",sme_support_status:"text",existing_relationship:"text",priority_tier:"text",procurement_status:"text",source_reference:"url",research_notes:"text",...baseAudit }, enums: { procurement_status:supplierStatuses, category:['Academic & Research Organisation','Commercial Smart Textile Developer','Conductive Textile & Fibre Supplier','Graphene Material Specialist','Printed Electronics Specialist','Textile Testing Laboratory','Prototype Integration Partner'] } },
   contacts: { table:"supplier_contacts",required:["supplier_id","full_name","email","change_reason"],fields:{supplier_id:"uuid",full_name:"text",role:"text",email:"email",phone:"text",linkedin_url:"url",preferred_contact_method:"text",notes:"text",...baseAudit} },
   interactions: { table:"interactions",required:["supplier_id","work_package_id","interaction_type","occurred_at","summary","change_reason"],fields:{supplier_id:"uuid",work_package_id:"uuid",interaction_type:"text",occurred_at:"timestamp",attendees:"text",summary:"text",technical_learning:"text",commercial_learning:"text",actions:"text",follow_up_date:"date",status:"text",...baseAudit} },
   rfqs: { table:"rfqs",required:["work_package_id","supplier_id","rfq_code","title","change_reason"],fields:{work_package_id:"uuid",supplier_id:"uuid",rfq_code:"text",title:"text",scope_summary:"text",sent_at:"timestamp",response_due_at:"timestamp",status:"text",requested_quote_type:"text",requested_letter_of_support:"boolean",requested_expression_of_interest:"boolean",vat_required:"boolean",min_likely_max_requested:"boolean",assumptions:"text",confidentiality_notes:"text",...baseAudit},enums:{status:rfqStatuses} },
@@ -30,6 +30,7 @@ const fail=(message:string,code="invalid_rd_payload",statusCode=400)=>Object.ass
 function parse(field:string,kind:Kind,value:unknown) {
   if(value===null||value==="") return null;
   if(kind==="text"){if(typeof value!=="string")throw fail(`${field} must be text`);const v=value.trim();if(v.length>10000)throw fail(`${field} is too long`);return v||null;}
+  if(kind==="text_array"){if(!Array.isArray(value)||value.some(item=>typeof item!=="string"))throw fail(`${field} must be a text array`);return value.map(item=>item.trim()).filter(Boolean).slice(0,20);}
   if(kind==="boolean"){if(typeof value!=="boolean")throw fail(`${field} must be boolean`);return value;}
   if(kind==="uuid"){if(typeof value!=="string"||!uuid.test(value))throw fail(`${field} must be a UUID`);return value;}
   if(kind==="date"){if(typeof value!=="string"||!date.test(value)||Number.isNaN(Date.parse(`${value}T00:00:00Z`)))throw fail(`${field} must be YYYY-MM-DD`);return value;}
@@ -75,7 +76,7 @@ export async function updateRecord(resource:RdResource,id:string,input:Record<st
 export async function summary(wpId:string,db:Db=pool){
   const r=await db.query(`SELECT
   (SELECT count(*)::int FROM rd_lab.suppliers WHERE work_package_id=$1) suppliers_identified,
-  (SELECT count(*)::int FROM rd_lab.suppliers WHERE work_package_id=$1 AND procurement_status IN('Contacted','Meeting Booked','Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Selected')) suppliers_contacted,
+  (SELECT count(*)::int FROM rd_lab.suppliers WHERE work_package_id=$1 AND procurement_status IN('Contacted','Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected')) suppliers_contacted,
   (SELECT count(*)::int FROM rd_lab.interactions WHERE work_package_id=$1 AND lower(interaction_type) LIKE '%meeting%') meetings_held,
   (SELECT count(*)::int FROM rd_lab.rfqs WHERE work_package_id=$1 AND status NOT IN('Draft','Ready')) rfqs_sent,
   (SELECT count(*)::int FROM rd_lab.quotations WHERE work_package_id=$1) quotations_received,

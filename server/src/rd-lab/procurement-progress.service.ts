@@ -6,6 +6,7 @@ export type ProcurementStageState = "Not Started" | "In Progress" | "Ready" | "C
 type ProgressFacts = {
   work_package_status: string;
   suppliers_identified: number;
+  suppliers_verified: number;
   suppliers_shortlisted: number;
   suppliers_contacted: number;
   suppliers_discovery_complete: number;
@@ -60,7 +61,7 @@ export function deriveProcurementProgress(
   const selectionRecorded = f.selection_decisions_recorded > 0 || f.suppliers_selected > 0;
 
   const research: ProcurementStageState = f.suppliers_identified === 0 ? "Not Started"
-    : f.suppliers_shortlisted === 0 ? "In Progress"
+    : f.suppliers_verified === 0 ? "In Progress"
     : engagementStarted ? "Complete" : "Ready";
   const engagement: ProcurementStageState = !engagementStarted ? "Not Started"
     : f.suppliers_discovery_complete > 0 && rfqStarted ? "Complete"
@@ -83,8 +84,8 @@ export function deriveProcurementProgress(
   const complete: ProcurementStageState = completeConditions ? "Complete" : "Not Started";
 
   const stages = [
-    { key: "research", label: "Research", state: research, completed_count: f.suppliers_shortlisted, target_count: null,
-      supporting_counts: { suppliers_identified: f.suppliers_identified, suppliers_shortlisted: f.suppliers_shortlisted } },
+    { key: "research", label: "Research", state: research, completed_count: f.suppliers_verified, target_count: null,
+      supporting_counts: { suppliers_identified: f.suppliers_identified, suppliers_verified: f.suppliers_verified } },
     { key: "supplier_engagement", label: "Supplier Engagement", state: engagement, completed_count: f.suppliers_discovery_complete, target_count: null,
       supporting_counts: { suppliers_contacted: f.suppliers_contacted, discovery_meetings_completed: f.discovery_meetings_completed } },
     { key: "rfqs", label: "RFQs", state: rfqs, completed_count: f.rfqs_sent, target_count: null,
@@ -102,8 +103,8 @@ export function deriveProcurementProgress(
   const currentStage = firstIncomplete?.label ?? "Complete";
 
   let nextAction = "Establish the first verified supplier record";
-  if (f.suppliers_identified > 0 && f.suppliers_shortlisted === 0) nextAction = "Shortlist the strongest supplier candidates";
-  else if (f.suppliers_shortlisted > 0 && !engagementStarted) nextAction = "Contact the first shortlisted supplier";
+  if (f.suppliers_identified > 0 && f.suppliers_verified === 0) nextAction = "Verify the first supplier profile";
+  else if (f.suppliers_verified > 0 && !engagementStarted) nextAction = "Contact the first verified supplier";
   else if (engagementStarted && f.suppliers_discovery_complete === 0) nextAction = "Book the first supplier discovery meeting";
   else if (f.suppliers_discovery_complete > 0 && f.rfqs_total === 0) nextAction = "Prepare the first RFQ";
   else if (f.rfqs_draft_or_ready > 0 && f.rfqs_sent === 0) nextAction = "Issue the RFQ";
@@ -131,7 +132,8 @@ export function deriveProcurementProgress(
     stages,
     summary: {
       suppliers_identified: f.suppliers_identified,
-      suppliers_shortlisted: f.suppliers_shortlisted,
+      suppliers_verified: f.suppliers_verified,
+      suppliers_shortlisted: f.suppliers_verified,
       suppliers_contacted: f.suppliers_contacted,
       meetings_held: f.discovery_meetings_completed,
       rfqs_sent: f.rfqs_sent,
@@ -150,9 +152,10 @@ export async function calculateProcurementProgress(workPackageId: string, db: Db
   const result = await db.query(`
     SELECT wp.status AS work_package_status,
       (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id) suppliers_identified,
-      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Shortlisted','Contacted','Meeting Booked','Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Selected','Reserve')) suppliers_shortlisted,
-      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Contacted','Meeting Booked','Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Selected')) suppliers_contacted,
-      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Discovery Complete','RFQ Planned','RFQ Sent','Quote Received','Selected')) suppliers_discovery_complete,
+      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Verified','Contacted','Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected','Closed')) suppliers_verified,
+      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Verified','Contacted','Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected','Closed')) suppliers_shortlisted,
+      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Contacted','Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected')) suppliers_contacted,
+      (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status IN('Discovery Meeting','RFQ Sent','Quote Received','Comparison','Selected')) suppliers_discovery_complete,
       (SELECT count(*)::int FROM rd_lab.suppliers s WHERE s.work_package_id=wp.id AND s.procurement_status='Selected') suppliers_selected,
       (SELECT count(*)::int FROM rd_lab.interactions i WHERE i.work_package_id=wp.id) interactions_count,
       (SELECT count(*)::int FROM rd_lab.interactions i WHERE i.work_package_id=wp.id AND lower(i.interaction_type) LIKE '%meeting%') discovery_meetings_completed,
