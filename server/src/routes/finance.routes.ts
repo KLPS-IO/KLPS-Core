@@ -38,6 +38,7 @@ import {
   createR2PresignedUrl,
   deleteFromR2,
   isR2Configured,
+  readFromR2,
   uploadToR2
 } from "../services/r2.service";
 import {
@@ -647,6 +648,26 @@ router.post(
       signed_url: signedUrl,
       expires_at: new Date(Date.now() + expiresSeconds * 1000).toISOString()
     }));
+  })
+);
+
+router.get(
+  "/evidence/:id/content",
+  asyncHandler(async (req, res) => {
+    const evidence = await getEvidence(getParam(req.params.id));
+    if (!evidence.r2_object_key || evidence.storage_provider !== "r2") {
+      return res.status(404).json({ status: "error", code: "evidence_file_not_found", message: "Evidence file not found" });
+    }
+    if (!isR2Configured()) {
+      return res.status(503).json({ status: "error", code: "r2_not_configured", message: "Document storage is unavailable" });
+    }
+    const file = await readFromR2(evidence.r2_object_key);
+    const filename = String(evidence.original_filename ?? "evidence-document")
+      .replace(/[\r\n"]/g, "");
+    res.setHeader("Content-Type", String(evidence.mime_type ?? file.contentType));
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(file.body);
   })
 );
 

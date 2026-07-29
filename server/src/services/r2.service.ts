@@ -2,7 +2,8 @@ import crypto from "crypto";
 import {
   S3Client,
   PutObjectCommand,
-  DeleteObjectCommand
+  DeleteObjectCommand,
+  GetObjectCommand
 } from "@aws-sdk/client-s3";
 
 type PresignInput = {
@@ -301,4 +302,18 @@ export const deleteFromR2 = async (objectKey: string) => {
     Bucket: config.bucket,
     Key: objectKey
   }));
+};
+
+export const readFromR2 = async (objectKey: string) => {
+  const config = getR2Config();
+  if (!config) throw new Error("Cloudflare R2 is not configured");
+  const result = await getR2Client().send(new GetObjectCommand({
+    Bucket: config.bucket,
+    Key: objectKey
+  }));
+  if (!result.Body) throw new Error("Evidence file body is unavailable");
+  return {
+    body: Buffer.from(await result.Body.transformToByteArray()),
+    contentType: result.ContentType ?? "application/octet-stream"
+  };
 };
