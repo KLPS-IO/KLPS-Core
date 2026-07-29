@@ -315,7 +315,7 @@ export const getMetricsSummary = async (workspaceId: string, db: Db = pool) => {
 
 export const getMissionControl = async (workspaceId: string, now = new Date(), db: Db = pool) => {
   const date = now.toISOString().slice(0, 10);
-  const [sprint, campaign, mission, goals, metrics, opportunities, coach] = await Promise.all([
+  const [sprint, campaign, mission, goals, metrics, opportunities, communityOpportunities, coach] = await Promise.all([
     db.query(`SELECT * FROM growth_os.sprints WHERE workspace_id=$1 AND status='active' LIMIT 1`, [workspaceId]),
     db.query(`SELECT * FROM growth_os.campaigns WHERE workspace_id=$1 AND status='active' ORDER BY created_at DESC LIMIT 1`, [workspaceId]),
     db.query(`SELECT * FROM growth_os.daily_missions WHERE workspace_id=$1 AND mission_date=$2 AND status IN ('active','planned') ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, [workspaceId, date]),
@@ -326,6 +326,25 @@ export const getMissionControl = async (workspaceId: string, now = new Date(), d
       CASE WHEN status IN ('record','edit','scheduled') THEN 'Ready to move closer to publishing' ELSE 'Aligned content work' END AS reason
       FROM growth_os.content_items WHERE workspace_id=$1 AND status NOT IN ('published','archived')
       ORDER BY score DESC,created_at LIMIT 5`, [workspaceId]),
+    db.query(`
+      SELECT * FROM (
+        SELECT NULL::uuid AS id,'community' AS type,
+          'Review new waitlist members' AS title,45 AS score,
+          COUNT(w.id)::int || ' unreviewed waitlist member(s) are waiting' AS reason,
+          'Review waitlist' AS action,10 AS estimated_minutes
+        FROM public.waitlist_signups w
+        LEFT JOIN growth_os.community_profiles p ON p.waitlist_signup_id=w.id AND p.workspace_id=$1
+        WHERE p.reviewed_at IS NULL
+        HAVING COUNT(w.id)>0
+        UNION ALL
+        SELECT NULL::uuid,'community','Complete overdue follow-ups',50,
+          COUNT(*)::int || ' founder-confirmed follow-up(s) are overdue',
+          'Open follow-ups',15
+        FROM growth_os.follow_up_tasks
+        WHERE workspace_id=$1 AND status='pending' AND due_at<now()
+        HAVING COUNT(*)>0
+      ) community_actions ORDER BY score DESC
+    `, [workspaceId]),
     coachData(workspaceId, now, db).then(deterministicCoach)
   ]);
   const activeGoals = goals.rows;
@@ -353,6 +372,9 @@ export const getMissionControl = async (workspaceId: string, now = new Date(), d
     growth_snapshot: growthSnapshot,
     metrics_summary: metrics,
     current_goals: activeGoals, progress_summary: progress,
-    coach_message: coach, ranked_opportunities: opportunities.rows
+    coach_message: coach,
+    ranked_opportunities: [...communityOpportunities.rows, ...opportunities.rows]
+      .sort((left, right) => Number(right.score) - Number(left.score))
+      .slice(0, 5)
   };
 };

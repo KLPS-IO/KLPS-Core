@@ -19,6 +19,26 @@ import {
   updateStrategy,
   updateWorkspace
 } from "./growth.service";
+import {
+  changeCommunityStage,
+  createFollowUp,
+  createInteraction,
+  createReferral,
+  createTrackedLink,
+  deterministicDraft,
+  getCommunityPerson,
+  getCommunitySummary,
+  getCommunityVoice,
+  getTractionSummary,
+  listCommunityPeople,
+  listFollowUps,
+  listInteractions,
+  listTrackedLinks,
+  markCommunityPersonReviewed,
+  saveQualification,
+  updateCommunityProfile,
+  updateFollowUp
+} from "./community.service";
 
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
@@ -75,6 +95,100 @@ router.get("/mission-control", asyncHandler(async (req, res) => {
 router.get("/metrics/summary", asyncHandler(async (req, res) => {
   const workspace = await workspaceFor(req);
   res.json({ status: "success", summary: await getMetricsSummary(workspace.id) });
+}));
+
+router.get("/community/summary", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", summary: await getCommunitySummary(workspace.id) });
+}));
+
+router.get("/community/people", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", ...(await listCommunityPeople(workspace.id, req.query)) });
+}));
+
+router.get("/community/people/:id", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", person: await getCommunityPerson(workspace.id, param(req.params.id)) });
+}));
+
+router.post("/community/people/:id/review", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", profile: await markCommunityPersonReviewed(workspace.id, param(req.params.id), req.dataRoomUser!.id) });
+}));
+
+router.patch("/community/people/:id", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", profile: await updateCommunityProfile(workspace.id, param(req.params.id), req.body ?? {}) });
+}));
+
+router.post("/community/people/:id/stage", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", profile: await changeCommunityStage(workspace.id, param(req.params.id), req.dataRoomUser!.id, req.body ?? {}) });
+}));
+
+router.post("/community/people/:id/interactions", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({ status: "success", interaction: await createInteraction(workspace.id, param(req.params.id), req.dataRoomUser!.id, req.body ?? {}) });
+}));
+
+router.get("/community/interactions", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", interactions: await listInteractions(workspace.id) });
+}));
+
+router.get("/community/follow-ups", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", follow_ups: await listFollowUps(workspace.id) });
+}));
+
+router.post("/community/people/:id/follow-ups", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({ status: "success", follow_up: await createFollowUp(workspace.id, param(req.params.id), req.body ?? {}) });
+}));
+
+router.patch("/community/follow-ups/:id", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", follow_up: await updateFollowUp(workspace.id, param(req.params.id), req.body ?? {}) });
+}));
+
+router.post("/community/people/:id/qualification", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", qualification: await saveQualification(workspace.id, param(req.params.id), req.body ?? {}) });
+}));
+
+router.post("/community/people/:id/draft", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  const person = await getCommunityPerson(workspace.id, param(req.params.id));
+  res.json({
+    status: "success",
+    draft: deterministicDraft(String(req.body?.kind ?? "follow_up"), person.name, person.relationship_stage)
+  });
+}));
+
+router.post("/community/people/:id/referrals", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({ status: "success", referral: await createReferral(workspace.id, param(req.params.id), req.body ?? {}) });
+}));
+
+router.get("/community/voice", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", voice: await getCommunityVoice(workspace.id) });
+}));
+
+router.get("/tracked-links", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", tracked_links: await listTrackedLinks(workspace.id) });
+}));
+
+router.post("/tracked-links", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({ status: "success", tracked_link: await createTrackedLink(workspace.id, req.body ?? {}) });
+}));
+
+router.get("/traction/summary", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({ status: "success", summary: await getTractionSummary(workspace.id) });
 }));
 
 for (const resource of Object.keys(GROWTH_RESOURCES) as GrowthResource[]) {

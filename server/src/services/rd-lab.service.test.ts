@@ -63,14 +63,12 @@ test("migration seeds only WP1 and adds R&D evidence targets without suppliers",
   assert.match(sql,/rd_work_package.*rd_supplier.*rd_rfq.*rd_quotation/s);
 });
 
-test("approved supplier sprint migration contains only the four verified identities and no capability claims", () => {
+test("approved supplier sprint migration seeds only approved identities and defers unresolved Manchester records", () => {
   const sql=readFileSync(join(process.cwd(),"server/sql/20260728_wp1_supplier_verification_sprint.sql"),"utf8");
-  for(const supplier of [
-    "The University of Manchester",
-    "Henry Royce Institute",
-    "Interactive Wear AG",
-    "Ohmatex A/S"
-  ]) assert.match(sql,new RegExp(supplier));
+  for(const supplier of ["Interactive Wear AG","Ohmatex A/S"])
+    assert.match(sql,new RegExp(supplier));
+  assert.match(sql,/University of Manchester \/ GEIC and Henry Royce Institute are intentionally/);
+  assert.match(sql,/not seeded until their distinct canonical naming has founder approval/);
   assert.doesNotMatch(sql,/paid_feasibility_status\s*,/);
   assert.doesNotMatch(sql,/relevant_capability\s*,/);
   assert.match(sql,/Ohmatex was bankrupt/);

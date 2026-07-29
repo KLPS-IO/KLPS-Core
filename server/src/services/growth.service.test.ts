@@ -131,6 +131,7 @@ test("mission control composes operational data in one response", async () => {
     if (sql.includes("FROM growth_os.goals")) return { rows: [{ id: RECORD_ID, label: "Reach", current_value: 5, target_value: 10 }] };
     if (sql.includes("FROM growth_os.metric_snapshots")) return { rows: [{ platform: "combined", snapshot_date: "2026-07-23", reach: 5 }] };
     if (sql.includes("'content' AS type")) return { rows: [{ id: RECORD_ID, type: "content", score: 30, reason: "Ready" }] };
+    if (sql.includes("community_actions")) return { rows: [] };
     throw new Error(`Unexpected query: ${sql}`);
   }};
   const result = await getMissionControl(WORKSPACE_ID, new Date("2026-07-23T12:00:00Z"), db as never);
