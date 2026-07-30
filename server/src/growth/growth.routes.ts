@@ -39,7 +39,7 @@ import {
   updateCommunityProfile,
   updateFollowUp
 } from "./community.service";
-import socialRoutes from "./social/social.routes";
+import socialRoutes, { socialOAuthCallbackRoutes } from "./social/social.routes";
 
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
@@ -64,6 +64,9 @@ export const requireGrowthFounder = (
   }
 };
 
+// The LinkedIn callback authenticates the single-use state record and its stored
+// founder/workspace binding. It deliberately does not depend on a cross-site cookie.
+router.use("/social",socialOAuthCallbackRoutes);
 router.use(requireDataRoomAuth, requireGrowthFounder);
 router.use("/social",socialRoutes);
 

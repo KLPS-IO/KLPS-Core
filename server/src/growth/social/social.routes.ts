@@ -5,6 +5,7 @@ import { getSocialAdapter } from "./social.registry";
 import {
   beginSocialOAuth,
   approveSocialContentVariant,
+  completeLinkedInOAuthFromState,
   completeSocialOAuth,
   createPublishJob,
   disconnectSocialProvider,
@@ -15,6 +16,7 @@ import {
 import { SocialProvider } from "./social.types";
 
 const router = express.Router();
+export const socialOAuthCallbackRoutes = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) =>
     Promise.resolve(handler(req as DataRoomRequest,res)).catch(next);
@@ -24,6 +26,89 @@ const providerFrom = (value: unknown) => {
   getSocialAdapter(provider);
   return provider as SocialProvider;
 };
+
+const SOCIAL_FRONTEND_ORIGIN = "https://klps.co.uk";
+const SOCIAL_FRONTEND_PATH = "/innovation-lab/growth/settings";
+const SOCIAL_FAILURE_CODES = {
+  social_oauth_provider_error:"access_denied",
+  social_oauth_state_required:"invalid_state",
+  social_oauth_state_invalid:"invalid_state",
+  social_oauth_state_expired:"expired_state",
+  social_oauth_code_missing:"missing_code",
+  linkedin_token_exchange_failed:"provider_exchange_failed",
+  linkedin_identity_lookup_failed:"identity_lookup_failed",
+  social_oauth_binding_invalid:"connection_failed",
+  social_oauth_callback_failed:"connection_failed"
+} as const;
+
+const socialFrontendBase = () => {
+  const fallback = new URL(SOCIAL_FRONTEND_PATH,SOCIAL_FRONTEND_ORIGIN);
+  const configured = process.env.GROWTH_SOCIAL_FRONTEND_URL?.trim();
+  if (!configured) return fallback;
+  try {
+    const candidate = new URL(configured);
+    if (
+      candidate.origin !== SOCIAL_FRONTEND_ORIGIN ||
+      (candidate.pathname !== "/" && candidate.pathname !== SOCIAL_FRONTEND_PATH) ||
+      candidate.username ||
+      candidate.password
+    ) return fallback;
+    return new URL(SOCIAL_FRONTEND_PATH,candidate.origin);
+  } catch {
+    return fallback;
+  }
+};
+
+export const buildSocialOAuthRedirect = (
+  result: { status:"connected" } | { status:"failed"; code:string }
+) => {
+  const url = socialFrontendBase();
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("social_provider","linkedin");
+  if (result.status === "connected") {
+    url.searchParams.set("social_status","connected");
+  } else {
+    url.searchParams.set("social_status","failed");
+    const code = SOCIAL_FAILURE_CODES[result.code as keyof typeof SOCIAL_FAILURE_CODES] ??
+      "connection_failed";
+    url.searchParams.set("social_error",code);
+  }
+  return url.toString();
+};
+
+type LinkedInCallbackCompleter = typeof completeLinkedInOAuthFromState;
+
+export const handleLinkedInOAuthCallback = async (
+  req: express.Request,
+  res: express.Response,
+  complete: LinkedInCallbackCompleter = completeLinkedInOAuthFromState
+) => {
+  try {
+    await complete(
+      String(req.query.state ?? ""),
+      String(req.query.code ?? ""),
+      typeof req.query.error === "string" ? req.query.error : undefined
+    );
+    return res.redirect(303,buildSocialOAuthRedirect({ status:"connected" }));
+  } catch (reason) {
+    const code = typeof reason === "object" && reason && "code" in reason &&
+      typeof reason.code === "string" ? reason.code : "social_oauth_callback_failed";
+    const safeCode = SOCIAL_FAILURE_CODES[code as keyof typeof SOCIAL_FAILURE_CODES] ??
+      "connection_failed";
+    console.warn(JSON.stringify({
+      event:"growth_social_oauth_callback_failed",
+      provider:"linkedin",
+      reason:safeCode
+    }));
+    return res.redirect(303,buildSocialOAuthRedirect({ status:"failed",code }));
+  }
+};
+
+socialOAuthCallbackRoutes.get(
+  "/oauth/linkedin/callback",
+  (req,res,next) => handleLinkedInOAuthCallback(req,res).catch(next)
+);
 
 router.get("/providers", asyncHandler(async (req,res) => {
   const workspace = await workspaceFor(req);

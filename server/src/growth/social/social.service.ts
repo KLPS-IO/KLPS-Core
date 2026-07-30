@@ -155,8 +155,106 @@ export const completeSocialOAuth = async (
     await audit(workspaceId,userId,provider,"oauth_callback","blocked",{ reason: "invalid_expired_or_replayed_state" },db);
     throw socialError("OAuth state is invalid, expired or already used", "social_oauth_state_invalid", 409);
   }
+  return completeSocialOAuthForAuthorisation({
+    ...authorisation.rows[0],
+    workspace_id:workspaceId,
+    initiated_by:userId
+  },provider,code,providerError,db);
+};
+
+type OAuthAuthorisationRow = {
+  workspace_id: string;
+  initiated_by: string;
+  redirect_uri: string;
+  encrypted_code_verifier: string | null;
+};
+
+const invalidState = (message = "OAuth state is invalid, expired or already used") =>
+  socialError(message, "social_oauth_state_invalid", 409);
+
+const diagnoseLinkedInStateFailure = async (stateHash: string, db: Db): Promise<never> => {
+  const result = await db.query(`
+    SELECT
+      a.provider,
+      a.expires_at <= now() AS expired,
+      a.consumed_at IS NOT NULL AS consumed,
+      w.id IS NOT NULL AS workspace_exists,
+      u.id IS NOT NULL AS initiator_exists,
+      u.role,
+      w.owner_user_id = a.initiated_by AS initiator_owns_workspace
+    FROM growth_os.social_oauth_authorisations a
+    LEFT JOIN growth_os.workspaces w ON w.id=a.workspace_id
+    LEFT JOIN data_room.users u ON u.id=a.initiated_by
+    WHERE a.state_hash=$1
+    LIMIT 1
+  `, [stateHash]);
+  const row = result.rows[0];
+  if (!row || row.provider !== "linkedin") throw invalidState();
+  if (row.expired) {
+    throw socialError("OAuth state has expired", "social_oauth_state_expired", 409);
+  }
+  if (row.consumed) throw invalidState();
+  if (
+    !row.workspace_exists ||
+    !row.initiator_exists ||
+    row.role !== "founder_admin" ||
+    !row.initiator_owns_workspace
+  ) {
+    throw socialError(
+      "OAuth founder or workspace binding is no longer authorised",
+      "social_oauth_binding_invalid",
+      403
+    );
+  }
+  // A concurrent request may have consumed the row between the UPDATE and this
+  // diagnostic read. Never permit a second exchange.
+  throw invalidState();
+};
+
+export const completeLinkedInOAuthFromState = async (
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool
+) => {
+  if (!state) throw socialError("OAuth state is required", "social_oauth_state_required");
+  const stateHash = hashOAuthState(state);
+  const authorisation = await db.query(`
+    UPDATE growth_os.social_oauth_authorisations a
+    SET consumed_at=now()
+    FROM growth_os.workspaces w
+    JOIN data_room.users u ON u.id=w.owner_user_id
+    WHERE a.provider='linkedin'
+      AND a.state_hash=$1
+      AND a.consumed_at IS NULL
+      AND a.expires_at>now()
+      AND w.id=a.workspace_id
+      AND w.owner_user_id=a.initiated_by
+      AND u.id=a.initiated_by
+      AND u.role='founder_admin'
+    RETURNING
+      a.workspace_id,
+      a.initiated_by,
+      a.redirect_uri,
+      a.encrypted_code_verifier
+  `, [stateHash]);
+  const row = authorisation.rows[0] as OAuthAuthorisationRow | undefined;
+  if (!row) await diagnoseLinkedInStateFailure(stateHash,db);
+  return completeSocialOAuthForAuthorisation(
+    row!,"linkedin",code,providerError,db
+  );
+};
+
+const completeSocialOAuthForAuthorisation = async (
+  row: OAuthAuthorisationRow,
+  provider: SocialProvider,
+  code: string,
+  providerError: string | undefined,
+  db: Db
+) => {
+  const workspaceId = row.workspace_id;
+  const userId = row.initiated_by;
   const adapter = getSocialAdapter(provider);
-  const row = authorisation.rows[0];
   const verifier = row.encrypted_code_verifier ? decryptSocialSecret(row.encrypted_code_verifier) : undefined;
   if (providerError) {
     await db.query(`
@@ -179,7 +277,9 @@ export const completeSocialOAuth = async (
     throw socialError("OAuth authorisation code is required", "social_oauth_code_missing");
   }
   try {
-    const token = await adapter.exchangeAuthorizationCode({ code, codeVerifier: verifier, redirectUri: row.redirect_uri });
+    const token = await adapter.exchangeAuthorizationCode({
+      code,codeVerifier:verifier,redirectUri:row.redirect_uri
+    });
     const result = await db.query(`
       INSERT INTO growth_os.social_connections(
         workspace_id,provider,provider_account_id,provider_account_name,provider_account_type,status,
@@ -220,7 +320,7 @@ export const completeSocialOAuth = async (
         last_error_code=$3,last_error_at=now()
       WHERE workspace_id=$1 AND provider=$2
     `, [workspaceId,provider,errorCode]);
-    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: errorCode },db);
+    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason:errorCode },db);
     throw reason;
   }
 };

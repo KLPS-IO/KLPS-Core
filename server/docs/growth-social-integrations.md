@@ -29,18 +29,27 @@ delivery. Studio supplies an approved platform variant; it never calls a provide
    a PKCE verifier for providers requiring PKCE.
 4. The encrypted verifier and ten-minute authorisation record are stored server-side.
 5. The frontend receives only the official provider authorisation URL.
-6. The authenticated callback atomically consumes the state. Expired, unknown and
-   replayed state is rejected.
-7. An activated provider adapter exchanges the code and verifies the provider
+6. OAuth start remains founder-authenticated. The authorisation record binds its
+   hashed state to the initiating founder and that founder's Growth OS workspace.
+7. The LinkedIn callback does not depend on a Railway session cookie. It atomically
+   consumes the state only when it is unexpired, unused, belongs to LinkedIn, the
+   stored initiator still owns the stored workspace, and that user is still a
+   `founder_admin`. Expired, unknown, unauthorised and replayed state is rejected
+   before LinkedIn is contacted.
+8. An activated provider adapter exchanges the code and verifies the provider
    identity before the connection becomes healthy.
-8. Access and any returned refresh token are AES-256-GCM encrypted before
+9. Access and any returned refresh token are AES-256-GCM encrypted before
    persistence.
-9. Granted scopes come from the token response and are not inferred from the
+10. Granted scopes come from the token response and are not inferred from the
    request. Refresh, health checks and revocation remain adapter responsibilities.
-10. Disconnect clears encrypted token material and records an audit event.
+11. Disconnect clears encrypted token material and records an audit event.
 
-The callback is founder-authenticated and workspace-bound. OAuth secrets, codes,
-state and tokens are excluded from structured audit details.
+The callback is state-authenticated and workspace-bound. This is intentional:
+`klps.co.uk` and the Railway hostname are different browser sites, so the callback
+must not rely on a cross-site cookie. Only OAuth start is allowed to create the
+binding, and that route remains behind the normal founder session and role checks.
+OAuth secrets, codes, raw state and tokens are excluded from structured audit
+details.
 
 ## Adapter contract
 
@@ -107,6 +116,17 @@ replace the encryption key while active encrypted connections exist.
 Common:
 
 - `GROWTH_SOCIAL_ENCRYPTION_KEY`
+- `GROWTH_SOCIAL_FRONTEND_URL`
+
+`GROWTH_SOCIAL_FRONTEND_URL` should be:
+
+```text
+https://klps.co.uk/innovation-lab/growth/settings
+```
+
+The backend allowlists the exact `https://klps.co.uk` origin and Growth settings
+path. A missing or invalid value falls back to that same URL. Callback query
+parameters cannot select a redirect destination.
 
 LinkedIn:
 
@@ -213,10 +233,20 @@ metrics.
 5. Deploy the backend and sign in to Growth OS as `founder_admin`.
 6. Call `POST /api/growth/social/oauth/linkedin/start` with the authenticated
    session and navigate the browser to the returned `oauth.authorization_url`.
-7. Approve the identity consent on LinkedIn. The callback returns a safe connection
-   object with `status: "connected"`, `provider_account_type: "member"`, and the
-   scopes LinkedIn actually returned. It never returns token material.
-8. Confirm the connection overview is healthy, the audit event succeeded, and
+7. Approve the identity consent on LinkedIn. The callback validates its server-side
+   founder/workspace binding without a browser cookie, completes the connection,
+   and redirects to:
+
+   ```text
+   https://klps.co.uk/innovation-lab/growth/settings?social_provider=linkedin&social_status=connected
+   ```
+
+   Failures use the same route with `social_status=failed` and one controlled
+   `social_error` value: `access_denied`, `invalid_state`, `expired_state`,
+   `missing_code`, `provider_exchange_failed`, `identity_lookup_failed`, or
+   `connection_failed`. Raw provider errors and identifiers are never included.
+8. Confirm the connection overview reports `provider_account_type: "member"` and
+   the scopes LinkedIn actually returned. Confirm the audit event succeeded and
    application logs contain no OAuth code, token or secret.
 
 Organisation/page discovery and all publishing require a separate LinkedIn product,
