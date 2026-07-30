@@ -1,5 +1,6 @@
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
+import { getMissionCandidates } from "./mission-candidate.service";
 
 type Db = Pick<PoolClient, "query">;
 type Input = Record<string, unknown>;
@@ -25,8 +26,21 @@ export const GROWTH_RESOURCES = {
   },
   missions: {
     table: "daily_missions", required: ["title", "mission_date"], defaultOrder: "mission_date DESC, created_at DESC",
-    fields: { sprint_id: "uuid", campaign_id: "uuid", title: "text", description: "text", reason: "text", expected_outcome: "text", estimated_minutes: "integer", priority: "text", mission_date: "date", status: "text", completed_at: "timestamp" },
-    enums: { priority: ["low", "medium", "high", "urgent"], status: ["planned", "active", "completed", "skipped"] }
+    fields: {
+      sprint_id: "uuid", campaign_id: "uuid", title: "text", description: "text",
+      reason: "text", expected_outcome: "text", estimated_minutes: "integer",
+      priority: "text", mission_date: "date", status: "text", completed_at: "timestamp",
+      candidate_type: "text", candidate_key: "text", source_module: "text",
+      related_entity_type: "text", related_entity_id: "uuid",
+      completion_condition: "json", cooldown_metadata: "json",
+      completion_verification: "text", outcome_verified_at: "timestamp",
+      manual_close_reason: "text"
+    },
+    enums: {
+      priority: ["low", "medium", "high", "urgent"],
+      status: ["planned", "active", "completed", "skipped"],
+      completion_verification: ["outcome_verified", "manual_closed"]
+    }
   },
   content: {
     table: "content_items", required: ["title", "content_type"], defaultOrder: "created_at DESC",
@@ -315,7 +329,7 @@ export const getMetricsSummary = async (workspaceId: string, db: Db = pool) => {
 
 export const getMissionControl = async (workspaceId: string, now = new Date(), db: Db = pool) => {
   const date = now.toISOString().slice(0, 10);
-  const [sprint, campaign, mission, goals, metrics, opportunities, communityOpportunities, coach] = await Promise.all([
+  const [sprint, campaign, mission, goals, metrics, opportunities, communityOpportunities, candidates] = await Promise.all([
     db.query(`SELECT * FROM growth_os.sprints WHERE workspace_id=$1 AND status='active' LIMIT 1`, [workspaceId]),
     db.query(`SELECT * FROM growth_os.campaigns WHERE workspace_id=$1 AND status='active' ORDER BY created_at DESC LIMIT 1`, [workspaceId]),
     db.query(`SELECT * FROM growth_os.daily_missions WHERE workspace_id=$1 AND mission_date=$2 AND status IN ('active','planned') ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, [workspaceId, date]),
@@ -345,7 +359,7 @@ export const getMissionControl = async (workspaceId: string, now = new Date(), d
         HAVING COUNT(*)>0
       ) community_actions ORDER BY score DESC
     `, [workspaceId]),
-    coachData(workspaceId, now, db).then(deterministicCoach)
+    getMissionCandidates(workspaceId, now, db)
   ]);
   const activeGoals = goals.rows;
   const progress = {
@@ -366,13 +380,36 @@ export const getMissionControl = async (workspaceId: string, now = new Date(), d
     posts_published: latestMetrics?.posts_published?.latest ?? null,
     waitlist_signups_attributed: latestMetrics?.waitlist_signups_attributed?.latest ?? null
   };
+  const recommendation = candidates[0] ?? null;
   return {
     active_sprint: sprint.rows[0] ?? null, active_campaign: campaign.rows[0] ?? null,
     today_mission: mission.rows[0] ?? null,
     growth_snapshot: growthSnapshot,
     metrics_summary: metrics,
     current_goals: activeGoals, progress_summary: progress,
-    coach_message: coach,
+    recommended_candidate: recommendation,
+    ranked_candidates: candidates.slice(0, 10),
+    coach_message: recommendation ? {
+      title: recommendation.title,
+      explanation: recommendation.why_it_matters,
+      action_type: recommendation.candidate_type,
+      related_record_id: recommendation.related_entity_id,
+      priority: recommendation.urgency,
+      estimated_minutes: recommendation.estimated_minutes,
+      expected_outcome: recommendation.expected_outcome,
+      candidate_key: recommendation.deduplication_key,
+      source_module: recommendation.source_module
+    } : {
+      title: "No urgent action detected",
+      explanation: "No unresolved recommendation is currently supported by saved Growth OS data.",
+      action_type: "none",
+      related_record_id: null,
+      priority: "low",
+      estimated_minutes: 0,
+      expected_outcome: "No action required.",
+      candidate_key: null,
+      source_module: null
+    },
     ranked_opportunities: [...communityOpportunities.rows, ...opportunities.rows]
       .sort((left, right) => Number(right.score) - Number(left.score))
       .slice(0, 5)

@@ -40,6 +40,11 @@ import {
   updateFollowUp
 } from "./community.service";
 import socialRoutes, { socialOAuthCallbackRoutes } from "./social/social.routes";
+import {
+  acceptMissionCandidate,
+  completeMission,
+  dismissMissionCandidate
+} from "./mission-candidate.service";
 
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
@@ -196,6 +201,48 @@ router.get("/traction/summary", asyncHandler(async (req, res) => {
   res.json({ status: "success", summary: await getTractionSummary(workspace.id) });
 }));
 
+router.post("/mission-candidates/accept", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({
+    status: "success",
+    mission: await acceptMissionCandidate(
+      workspace.id,
+      String(req.body?.candidate_key ?? ""),
+      String(req.body?.mission_date ?? "")
+    )
+  });
+}));
+
+router.post("/mission-candidates/dismiss", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.status(201).json({
+    status: "success",
+    dismissal: await dismissMissionCandidate(
+      workspace.id,
+      String(req.body?.candidate_key ?? ""),
+      String(req.body?.candidate_type ?? ""),
+      typeof req.body?.reason === "string" ? req.body.reason : undefined
+    )
+  });
+}));
+
+router.post("/missions/:id/complete", asyncHandler(async (req, res) => {
+  const workspace = await workspaceFor(req);
+  res.json({
+    status: "success",
+    ...(await completeMission(
+      workspace.id,
+      param(req.params.id),
+      {
+        manual_close: req.body?.manual_close === true,
+        manual_close_reason: typeof req.body?.manual_close_reason === "string"
+          ? req.body.manual_close_reason
+          : undefined
+      }
+    ))
+  });
+}));
+
 for (const resource of Object.keys(GROWTH_RESOURCES) as GrowthResource[]) {
   router.get(`/${resource}`, asyncHandler(async (req, res) => {
     const workspace = await workspaceFor(req);
@@ -211,6 +258,19 @@ for (const resource of Object.keys(GROWTH_RESOURCES) as GrowthResource[]) {
   }));
   router.patch(`/${resource}/:id`, asyncHandler(async (req, res) => {
     const workspace = await workspaceFor(req);
+    if (resource === "missions" && req.body?.status === "completed") {
+      const completed = await completeMission(
+        workspace.id,
+        param(req.params.id),
+        {
+          manual_close: req.body?.manual_close === true,
+          manual_close_reason: typeof req.body?.manual_close_reason === "string"
+            ? req.body.manual_close_reason
+            : undefined
+        }
+      );
+      return res.json({ status: "success", record: completed.mission });
+    }
     res.json({ status: "success", record: await updateGrowthRecord(resource, workspace.id, param(req.params.id), req.body ?? {}) });
   }));
   router.delete(`/${resource}/:id`, asyncHandler(async (req, res) => {
@@ -220,7 +280,7 @@ for (const resource of Object.keys(GROWTH_RESOURCES) as GrowthResource[]) {
 }
 
 router.use((
-  error: Error & { statusCode?: number; code?: string },
+  error: Error & { statusCode?: number; code?: string; details?: unknown },
   _req: express.Request,
   res: express.Response,
   next: express.NextFunction
@@ -229,7 +289,12 @@ router.use((
     return res.status(400).json({ status: "error", code: "invalid_growth_reference", message: "A related Growth OS record does not exist" });
   }
   if (!error.statusCode) return next(error);
-  return res.status(error.statusCode).json({ status: "error", code: error.code ?? "growth_error", message: error.message });
+  return res.status(error.statusCode).json({
+    status: "error",
+    code: error.code ?? "growth_error",
+    message: error.message,
+    ...(error.details === undefined ? {} : { details: error.details })
+  });
 });
 
 export default router;

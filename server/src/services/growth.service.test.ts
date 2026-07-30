@@ -132,6 +132,13 @@ test("mission control composes operational data in one response", async () => {
     if (sql.includes("FROM growth_os.metric_snapshots")) return { rows: [{ platform: "combined", snapshot_date: "2026-07-23", reach: 5 }] };
     if (sql.includes("'content' AS type")) return { rows: [{ id: RECORD_ID, type: "content", score: 30, reason: "Ready" }] };
     if (sql.includes("community_actions")) return { rows: [] };
+    if (sql.includes("FROM growth_os.social_connections")) return { rows: [] };
+    if (sql.includes("SELECT id,title,status,scheduled_at")) return { rows: [] };
+    if (sql.includes("FROM growth_os.follow_up_tasks f")) return { rows: [] };
+    if (sql.includes("FROM public.waitlist_signups w")) return { rows: [] };
+    if (sql.includes("FROM growth_os.mvp_qualifications q")) return { rows: [] };
+    if (sql.includes("FROM growth_os.referrals r")) return { rows: [] };
+    if (sql.includes("FROM growth_os.insights")) return { rows: [] };
     throw new Error(`Unexpected query: ${sql}`);
   }};
   const result = await getMissionControl(WORKSPACE_ID, new Date("2026-07-23T12:00:00Z"), db as never);
@@ -140,7 +147,8 @@ test("mission control composes operational data in one response", async () => {
   assert.equal(result.current_goals.length, 1);
   assert.equal(result.progress_summary.goals_with_progress[0].progress_percentage, 50);
   assert.equal(result.ranked_opportunities.length, 1);
-  assert.equal(result.coach_message.action_type, "review_plan");
+  assert.equal(result.coach_message.action_type, "prepare_campaign_content");
+  assert.equal(result.recommended_candidate.expected_outcome, "One active-campaign content item prepared and ready for scheduling.");
   assert.deepEqual(result.growth_snapshot, {
     followers: null,
     reach: 5,
