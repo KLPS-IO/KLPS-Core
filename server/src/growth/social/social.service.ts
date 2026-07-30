@@ -38,6 +38,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
+    const providerActivated = definition.id === "linkedin" && environment.available;
     return {
       provider: definition.id,
       name: definition.name,
@@ -45,10 +46,18 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       availability: environment,
       required_permissions: definition.scopes,
       capabilities: definition.capabilities,
-      approval_required: true,
+      approval_required: !providerActivated,
       setup_checklist: [
-        { label: "Developer account", detail: definition.developerAccount, status: "required" },
-        { label: "Application", detail: definition.applicationName, status: "required" },
+        {
+          label: "Developer account",
+          detail: definition.developerAccount,
+          status: providerActivated ? "configured" : "required"
+        },
+        {
+          label: "Application",
+          detail: definition.applicationName,
+          status: providerActivated ? "configured" : "required"
+        },
         ...definition.requiredEnvironment.map(name => ({
           label: name,
           detail: name.endsWith("REDIRECT_URI")
@@ -59,7 +68,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         ...definition.externalReview.map(detail => ({
           label: "Provider approval",
           detail,
-          status: definition.futureReady ? "future" : "external_review"
+          status: definition.futureReady ? "future" : providerActivated ? "configured" : "external_review"
         }))
       ]
     };

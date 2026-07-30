@@ -6,6 +6,7 @@ import {
   beginSocialOAuth,
   completeLinkedInOAuthFromState,
   completeSocialOAuth,
+  getSocialProviderOverview,
   validatePublishReadiness
 } from "../growth/social/social.service";
 import {
@@ -124,6 +125,25 @@ test("LinkedIn authorization requests only OIDC identity scopes", async () => {
     assert.equal(url.searchParams.has("w_member_social"),false);
     const oauthInsert = queries.find(item => item.sql.includes("social_oauth_authorisations"))!;
     assert.equal(oauthInsert.values[3],null);
+  } finally { process.env = previous; }
+});
+
+test("configured LinkedIn activation reports its setup checklist as complete", async () => {
+  const previous = { ...process.env };
+  Object.assign(process.env,{
+    LINKEDIN_CLIENT_ID:"linkedin-client",
+    LINKEDIN_CLIENT_SECRET:"linkedin-secret",
+    LINKEDIN_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/linkedin/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64")
+  });
+  const db = { query: async () => ({ rows:[] }) };
+  try {
+    const overview = await getSocialProviderOverview(workspaceId,db as never);
+    const linkedin = overview.find(provider => provider.provider === "linkedin")!;
+    assert.equal(linkedin.approval_required,false);
+    assert.ok(linkedin.setup_checklist.length > 0);
+    assert.ok(linkedin.setup_checklist.every(item => item.status === "configured"));
+    assert.deepEqual(linkedin.capabilities,[]);
   } finally { process.env = previous; }
 });
 
