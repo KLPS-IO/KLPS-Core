@@ -44,7 +44,8 @@ router.get("/oauth/:provider/callback", asyncHandler(async (req,res) => {
   const workspace = await workspaceFor(req);
   const connection = await completeSocialOAuth(
     workspace.id,req.dataRoomUser!.id,providerFrom(req.params.provider),
-    String(req.query.state ?? ""),String(req.query.code ?? "")
+    String(req.query.state ?? ""),String(req.query.code ?? ""),undefined,
+    typeof req.query.error === "string" ? req.query.error : undefined
   );
   res.json({ status: "success", connection });
 }));

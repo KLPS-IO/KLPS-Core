@@ -28,7 +28,7 @@ const safeText = (value: unknown, field: string, limit = 1000) => {
 
 export const getSocialProviderOverview = async (workspaceId: string, db: Db = pool) => {
   const connectionResult = await db.query(`
-    SELECT id,provider,provider_account_name,status,granted_scopes,
+    SELECT id,provider,provider_account_name,provider_account_type,status,granted_scopes,
       discovered_capabilities,last_successful_check_at,last_error_code,last_error_at,
       connected_at,token_expires_at
     FROM growth_os.social_connections WHERE workspace_id=$1
@@ -121,7 +121,11 @@ export const beginSocialOAuth = async (
     INSERT INTO growth_os.social_connections(workspace_id,provider,status)
     VALUES($1,$2,'connecting')
     ON CONFLICT(workspace_id,provider) DO UPDATE SET
-      status='connecting',last_error_code=NULL,last_error_at=NULL
+      status=CASE
+        WHEN growth_os.social_connections.encrypted_access_token IS NULL THEN 'connecting'
+        ELSE growth_os.social_connections.status
+      END,
+      last_error_code=NULL,last_error_at=NULL
   `, [workspaceId,provider]);
   await audit(workspaceId,userId,provider,"oauth_start","started",{ redirect_host: new URL(redirectUri).host },db);
   return {
@@ -136,9 +140,10 @@ export const completeSocialOAuth = async (
   provider: SocialProvider,
   state: string,
   code: string,
-  db: Db = pool
+  db: Db = pool,
+  providerError?: string
 ) => {
-  if (!state || !code) throw socialError("OAuth state and code are required");
+  if (!state) throw socialError("OAuth state is required", "social_oauth_state_required");
   const authorisation = await db.query(`
     UPDATE growth_os.social_oauth_authorisations
     SET consumed_at=now()
@@ -153,18 +158,39 @@ export const completeSocialOAuth = async (
   const adapter = getSocialAdapter(provider);
   const row = authorisation.rows[0];
   const verifier = row.encrypted_code_verifier ? decryptSocialSecret(row.encrypted_code_verifier) : undefined;
+  if (providerError) {
+    await db.query(`
+      UPDATE growth_os.social_connections
+      SET status=CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END,
+        last_error_code='provider_authorization_failed',last_error_at=now()
+      WHERE workspace_id=$1 AND provider=$2
+    `, [workspaceId,provider]);
+    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "provider_authorization_failed" },db);
+    throw socialError(`${adapter.definition.name} authorisation was not completed`, "social_oauth_provider_error");
+  }
+  if (!code) {
+    await db.query(`
+      UPDATE growth_os.social_connections
+      SET status=CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END,
+        last_error_code='missing_authorization_code',last_error_at=now()
+      WHERE workspace_id=$1 AND provider=$2
+    `, [workspaceId,provider]);
+    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "missing_authorization_code" },db);
+    throw socialError("OAuth authorisation code is required", "social_oauth_code_missing");
+  }
   try {
     const token = await adapter.exchangeAuthorizationCode({ code, codeVerifier: verifier, redirectUri: row.redirect_uri });
     const result = await db.query(`
       INSERT INTO growth_os.social_connections(
-        workspace_id,provider,provider_account_id,provider_account_name,status,
+        workspace_id,provider,provider_account_id,provider_account_name,provider_account_type,status,
         encrypted_access_token,encrypted_refresh_token,token_expires_at,
         granted_scopes,discovered_capabilities,last_successful_check_at,
         connected_by,connected_at
-      ) VALUES($1,$2,$3,$4,'connected',$5,$6,$7,$8,$9,now(),$10,now())
+      ) VALUES($1,$2,$3,$4,$5,'connected',$6,$7,$8,$9,$10,now(),$11,now())
       ON CONFLICT(workspace_id,provider) DO UPDATE SET
         provider_account_id=EXCLUDED.provider_account_id,
         provider_account_name=EXCLUDED.provider_account_name,
+        provider_account_type=EXCLUDED.provider_account_type,
         status='connected',
         encrypted_access_token=EXCLUDED.encrypted_access_token,
         encrypted_refresh_token=EXCLUDED.encrypted_refresh_token,
@@ -173,19 +199,28 @@ export const completeSocialOAuth = async (
         discovered_capabilities=EXCLUDED.discovered_capabilities,
         last_successful_check_at=now(),connected_by=EXCLUDED.connected_by,
         connected_at=now(),revoked_at=NULL,last_error_code=NULL,last_error_at=NULL
-      RETURNING id,provider,status,provider_account_name,granted_scopes,
+      RETURNING id,provider,status,provider_account_name,provider_account_type,granted_scopes,
         discovered_capabilities,last_successful_check_at,connected_at
     `, [
-      workspaceId,provider,token.providerAccountId ?? null,token.providerAccountName ?? null,
+      workspaceId,provider,token.providerAccountId,token.providerAccountName,token.providerAccountType,
       encryptSocialSecret(token.accessToken),
       token.refreshToken ? encryptSocialSecret(token.refreshToken) : null,
-      token.expiresAt?.toISOString() ?? null,token.scopes,adapter.definition.capabilities,userId
+      token.expiresAt?.toISOString() ?? null,token.scopes,token.discoveredCapabilities,userId
     ]);
     await audit(workspaceId,userId,provider,"oauth_callback","success",{},db);
     return result.rows[0];
   } catch (reason) {
-    await db.query(`UPDATE growth_os.social_connections SET status='disconnected',last_error_code='activation_pending',last_error_at=now() WHERE workspace_id=$1 AND provider=$2`, [workspaceId,provider]);
-    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "provider_activation_pending" },db);
+    const errorCode = typeof reason === "object" && reason && "code" in reason &&
+      typeof reason.code === "string" && /^linkedin_[a-z_]+$/.test(reason.code)
+      ? reason.code
+      : "social_oauth_callback_failed";
+    await db.query(`
+      UPDATE growth_os.social_connections
+      SET status=CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END,
+        last_error_code=$3,last_error_at=now()
+      WHERE workspace_id=$1 AND provider=$2
+    `, [workspaceId,provider,errorCode]);
+    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: errorCode },db);
     throw reason;
   }
 };

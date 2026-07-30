@@ -4,19 +4,20 @@ import {
   SocialProviderAdapter,
   SocialProviderDefinition
 } from "./social.types";
+import { exchangeLinkedInAuthorizationCode } from "./linkedin.adapter";
 
 const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   linkedin: {
     id: "linkedin", name: "LinkedIn",
     developerAccount: "LinkedIn Developer account",
-    applicationName: "LinkedIn application with Community Management access",
+    applicationName: "LinkedIn application with Sign In with LinkedIn using OpenID Connect",
     authorizationUrl: "https://www.linkedin.com/oauth/v2/authorization",
     tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
-    scopes: ["openid","profile","w_member_social"],
-    capabilities: ["text","images","video","clickable_links","metrics","direct_publishing"],
+    scopes: ["openid","profile"],
+    capabilities: [],
     requiredEnvironment: ["LINKEDIN_CLIENT_ID","LINKEDIN_CLIENT_SECRET","LINKEDIN_REDIRECT_URI"],
     supportsPkce: false,
-    externalReview: ["Request and receive access to the required LinkedIn products and publishing permissions."]
+    externalReview: ["Enable Sign In with LinkedIn using OpenID Connect. Publishing products and permissions are not required for this connection."]
   },
   facebook: {
     id: "facebook", name: "Facebook Pages",
@@ -127,7 +128,10 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     }
     return url.toString();
   },
-  exchangeAuthorizationCode: async () => {
+  exchangeAuthorizationCode: async input => {
+    if (definition.id === "linkedin") {
+      return exchangeLinkedInAuthorizationCode(definition, providerEnv(definition.id), input);
+    }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
   refreshToken: async () => {
@@ -165,7 +169,9 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
       ? "Provider adapter reserved for future activation"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
-        : "OAuth can be initiated; provider token exchange remains activation-gated"
+        : provider === "linkedin"
+          ? "OAuth connection is configured"
+          : "OAuth can be initiated; provider token exchange remains activation-gated"
   };
 };
 

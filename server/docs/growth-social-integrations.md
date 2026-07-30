@@ -3,9 +3,10 @@
 ## Scope
 
 Phase 4A establishes the secure provider-neutral connection, approval, scheduling,
-metrics and audit boundaries. It does not enable direct publishing. Provider token
-exchange, refresh, revocation, health and publishing methods remain activation-gated
-until KLPS owns the required developer applications and provider approvals.
+metrics and audit boundaries. It does not enable direct publishing. LinkedIn member
+identity connection is active; publishing, refresh and revocation remain
+activation-gated. Other providers remain activation-gated until KLPS owns the
+required developer applications and provider approvals.
 
 Studio remains the editorial workflow. The social module owns connections and
 delivery. Studio supplies an approved platform variant; it never calls a provider API.
@@ -30,9 +31,12 @@ delivery. Studio supplies an approved platform variant; it never calls a provide
 5. The frontend receives only the official provider authorisation URL.
 6. The authenticated callback atomically consumes the state. Expired, unknown and
    replayed state is rejected.
-7. A provider adapter exchanges the code after that provider is activated.
-8. Access and refresh tokens are AES-256-GCM encrypted before persistence.
-9. Refresh, health checks and revocation remain adapter responsibilities.
+7. An activated provider adapter exchanges the code and verifies the provider
+   identity before the connection becomes healthy.
+8. Access and any returned refresh token are AES-256-GCM encrypted before
+   persistence.
+9. Granted scopes come from the token response and are not inferred from the
+   request. Refresh, health checks and revocation remain adapter responsibilities.
 10. Disconnect clears encrypted token material and records an audit event.
 
 The callback is founder-authenticated and workspace-bound. OAuth secrets, codes,
@@ -110,6 +114,24 @@ LinkedIn:
 - `LINKEDIN_CLIENT_SECRET`
 - `LINKEDIN_REDIRECT_URI`
 
+LinkedIn currently requests only `openid profile` through the **Sign In with
+LinkedIn using OpenID Connect** product. The product also makes `email` available,
+but this connection does not request it because no email address is needed. The
+verified `/v2/userinfo` subject is
+persisted as a `member` account. No organisation/page identity is inferred, and no
+member or organisation publishing scope is requested.
+
+Set the production redirect URI exactly to:
+
+```text
+https://klps-lema-production.up.railway.app/api/growth/social/oauth/linkedin/callback
+```
+
+LinkedIn documents PKCE for native clients. This backend is a confidential web
+client and uses LinkedIn's server-side code exchange with the client secret, so the
+LinkedIn adapter does not enable PKCE. The provider-neutral implementation remains
+available for adapters that support it.
+
 Meta / Facebook Pages / Instagram Professional:
 
 - `META_CLIENT_ID`
@@ -147,7 +169,7 @@ The backend never creates developer credentials and does not accept them through
 
 Recommended activation order:
 
-1. LinkedIn, for controlled founder-led text publishing.
+1. LinkedIn member identity connection; publishing remains a separate activation.
 2. Meta, activating Facebook Pages before Instagram Professional.
 3. TikTok, initially using provider-supported draft upload where approval permits.
 4. X, after confirming API tier and publishing volume.
@@ -167,17 +189,39 @@ Timing alone is not attribution.
 
 ## Deployment
 
-1. Review and apply `server/sql/20260730_growth_social_foundation.sql`.
+1. Review and apply `server/sql/20260730_growth_social_foundation.sql`, followed by
+   `server/sql/20260730_linkedin_oauth_activation.sql`.
 2. Configure only the credentials for the provider being activated.
 3. Configure the exact production callback URL at both KLPS and the provider.
 4. Deploy the backend before the frontend Connections UI.
 5. Confirm missing providers show Setup required without affecting Growth OS.
-6. Complete provider review before enabling token exchange or publishing.
+6. For LinkedIn, enable **Sign In with LinkedIn using OpenID Connect** and confirm
+   `openid` and `profile` appear on the application's Auth tab.
 7. Run a founder-authenticated OAuth state/replay smoke test.
 8. Inspect audit events and verify logs contain no token or authorisation code.
 
-The migration is transaction-safe and seeds no connections, jobs, credentials or
+Both migrations are transaction-safe and seed no connections, jobs, credentials or
 metrics.
+
+### First LinkedIn live connection
+
+1. Add the exact HTTPS callback above to the LinkedIn application's **Auth** tab.
+2. Enable **Sign In with LinkedIn using OpenID Connect** in **Products**.
+3. Set the three LinkedIn variables and the existing
+   `GROWTH_SOCIAL_ENCRYPTION_KEY` in Railway; never expose them to the frontend.
+4. Apply the two social migrations in order, if they are not already present.
+5. Deploy the backend and sign in to Growth OS as `founder_admin`.
+6. Call `POST /api/growth/social/oauth/linkedin/start` with the authenticated
+   session and navigate the browser to the returned `oauth.authorization_url`.
+7. Approve the identity consent on LinkedIn. The callback returns a safe connection
+   object with `status: "connected"`, `provider_account_type: "member"`, and the
+   scopes LinkedIn actually returned. It never returns token material.
+8. Confirm the connection overview is healthy, the audit event succeeded, and
+   application logs contain no OAuth code, token or secret.
+
+Organisation/page discovery and all publishing require a separate LinkedIn product,
+permissions and implementation. Do not enable Community Management or assume
+organisation administrator rights for this identity-only connection.
 
 ## Troubleshooting
 
@@ -185,8 +229,9 @@ metrics.
   environment variables.
 - **OAuth state invalid:** restart Connect; state expires after ten minutes and is
   deliberately single-use.
-- **Provider activation pending:** credentials may exist, but that adapter's token
-  exchange is intentionally not enabled yet.
+- **LinkedIn token exchange failed:** confirm the client credentials, exact redirect
+  URI and OIDC product/scopes. Restart Connect because the state and code are
+  single-use.
 - **Publishing blocked:** inspect approval, destination, health and capability
   readiness. Do not bypass the gate.
 - **Decryption failure:** stop provider processing and reconnect through OAuth after

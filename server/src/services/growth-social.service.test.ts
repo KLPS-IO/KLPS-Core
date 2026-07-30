@@ -40,6 +40,15 @@ test("social migration creates isolated encrypted connection and approval tables
   assert.doesNotMatch(sql,/INSERT INTO growth_os\.social_connections[\s\S]*VALUES\s*\([^$]/);
 });
 
+test("LinkedIn activation migration adds an explicit member or organization account kind", () => {
+  const sql = readFileSync("server/sql/20260730_linkedin_oauth_activation.sql","utf8");
+  assert.match(sql,/^BEGIN;/m);
+  assert.match(sql,/provider_account_type text/);
+  assert.match(sql,/provider_account_type IN \('member','organization'\)/);
+  assert.match(sql,/COMMIT;/);
+  assert.doesNotMatch(sql,/\bINSERT\b|\bDELETE\b|\bTRUNCATE\b/i);
+});
+
 test("token encryption is authenticated and tokens do not remain plaintext", () => {
   const previous = process.env.GROWTH_SOCIAL_ENCRYPTION_KEY;
   process.env.GROWTH_SOCIAL_ENCRYPTION_KEY = Buffer.alloc(32,7).toString("base64");
@@ -82,6 +91,56 @@ test("missing provider environment marks only that provider unavailable", () => 
   } finally {
     if (previous !== undefined) process.env.LINKEDIN_CLIENT_ID = previous;
   }
+});
+
+test("LinkedIn authorization requests only OIDC identity scopes", async () => {
+  const previous = { ...process.env };
+  Object.assign(process.env,{
+    LINKEDIN_CLIENT_ID:"linkedin-client",
+    LINKEDIN_CLIENT_SECRET:"linkedin-secret",
+    LINKEDIN_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/linkedin/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64")
+  });
+  const queries: Array<{ sql:string; values:unknown[] }> = [];
+  const db = { query: async (sql:string,values:unknown[]=[]) => {
+    queries.push({ sql,values });
+    return { rows:[] };
+  }};
+  try {
+    const result = await beginSocialOAuth(workspaceId,userId,"linkedin",db as never);
+    const url = new URL(result.authorization_url);
+    assert.equal(url.origin,"https://www.linkedin.com");
+    assert.equal(url.pathname,"/oauth/v2/authorization");
+    assert.equal(url.searchParams.get("client_id"),"linkedin-client");
+    assert.equal(url.searchParams.get("redirect_uri"),process.env.LINKEDIN_REDIRECT_URI);
+    assert.equal(url.searchParams.get("scope"),"openid profile");
+    assert.equal(url.searchParams.has("code_challenge"),false);
+    assert.equal(url.searchParams.has("client_secret"),false);
+    assert.equal(url.searchParams.has("w_member_social"),false);
+    const oauthInsert = queries.find(item => item.sql.includes("social_oauth_authorisations"))!;
+    assert.equal(oauthInsert.values[3],null);
+  } finally { process.env = previous; }
+});
+
+test("OAuth restart preserves an existing encrypted connection until replacement succeeds", async () => {
+  const previous = { ...process.env };
+  Object.assign(process.env,{
+    LINKEDIN_CLIENT_ID:"linkedin-client",
+    LINKEDIN_CLIENT_SECRET:"linkedin-secret",
+    LINKEDIN_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/linkedin/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,9).toString("base64")
+  });
+  const queries:string[] = [];
+  const db = { query: async (sql:string) => {
+    queries.push(sql);
+    return { rows:[] };
+  }};
+  try {
+    await beginSocialOAuth(workspaceId,userId,"linkedin",db as never);
+    const connectionUpsert = queries.find(sql => sql.includes("INSERT INTO growth_os.social_connections"))!;
+    assert.match(connectionUpsert,/encrypted_access_token IS NULL THEN 'connecting'/);
+    assert.doesNotMatch(connectionUpsert,/encrypted_access_token=NULL/);
+  } finally { process.env = previous; }
 });
 
 test("publishing requires every approval, connection and capability condition", () => {
@@ -138,4 +197,176 @@ test("OAuth callback atomically consumes state and rejects replay", async () => 
     /invalid, expired or already used/
   );
   assert.match(queries[0],/consumed_at IS NULL AND expires_at>now\(\)/);
+});
+
+const withLinkedInEnvironment = async (run: () => Promise<void>) => {
+  const previousEnvironment = { ...process.env };
+  const previousFetch = global.fetch;
+  Object.assign(process.env,{
+    LINKEDIN_CLIENT_ID:"linkedin-client",
+    LINKEDIN_CLIENT_SECRET:"linkedin-client-secret",
+    LINKEDIN_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/linkedin/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,10).toString("base64")
+  });
+  try {
+    await run();
+  } finally {
+    global.fetch = previousFetch;
+    process.env = previousEnvironment;
+  }
+};
+
+const callbackDb = (connection = {
+  id:"33333333-3333-4333-8333-333333333333",
+  provider:"linkedin",
+  status:"connected",
+  provider_account_name:"Emma Mendez",
+  provider_account_type:"member",
+  granted_scopes:["openid","profile"],
+  discovered_capabilities:[]
+}) => {
+  const queries: Array<{ sql:string; values:unknown[] }> = [];
+  const db = { query: async (sql:string,values:unknown[]=[]) => {
+    queries.push({ sql,values });
+    if (sql.includes("UPDATE growth_os.social_oauth_authorisations")) {
+      return { rows:[{
+        redirect_uri:process.env.LINKEDIN_REDIRECT_URI,
+        encrypted_code_verifier:null
+      }] };
+    }
+    if (sql.includes("INSERT INTO growth_os.social_connections")) return { rows:[connection] };
+    return { rows:[] };
+  }};
+  return { db,queries };
+};
+
+test("valid LinkedIn callback verifies member identity and persists only encrypted tokens", async () => {
+  await withLinkedInEnvironment(async () => {
+    const requests: Array<{ url:string; init?:RequestInit }> = [];
+    global.fetch = async (input: string | URL | Request,init?:RequestInit) => {
+      requests.push({ url:String(input),init });
+      if (requests.length === 1) return new Response(JSON.stringify({
+        access_token:"linkedin-access-token",
+        refresh_token:"linkedin-refresh-token",
+        expires_in:3600,
+        scope:"openid profile"
+      }),{ status:200,headers:{ "Content-Type":"application/json" } });
+      return new Response(JSON.stringify({
+        sub:"linkedin-member-123",
+        name:"Emma Mendez",
+        email:"private@example.com"
+      }),{ status:200,headers:{ "Content-Type":"application/json" } });
+    };
+    const { db,queries } = callbackDb();
+    const result = await completeSocialOAuth(
+      workspaceId,userId,"linkedin","valid-state","valid-code",db as never
+    );
+    assert.equal(result.status,"connected");
+    assert.equal(result.provider_account_type,"member");
+    assert.equal(requests[0].url,"https://www.linkedin.com/oauth/v2/accessToken");
+    assert.equal(requests[1].url,"https://api.linkedin.com/v2/userinfo");
+    const connectionInsert = queries.find(item => item.sql.includes("INSERT INTO growth_os.social_connections"))!;
+    assert.equal(connectionInsert.values[2],"linkedin-member-123");
+    assert.equal(connectionInsert.values[4],"member");
+    assert.match(String(connectionInsert.values[5]),/^v1\./);
+    assert.match(String(connectionInsert.values[6]),/^v1\./);
+    assert.equal(decryptSocialSecret(String(connectionInsert.values[5])),"linkedin-access-token");
+    assert.equal(decryptSocialSecret(String(connectionInsert.values[6])),"linkedin-refresh-token");
+    assert.deepEqual(connectionInsert.values[8],["openid","profile"]);
+    assert.deepEqual(connectionInsert.values[9],[]);
+    assert.doesNotMatch(JSON.stringify(queries),/private@example\.com/);
+    assert.doesNotMatch(JSON.stringify(result),/access-token|refresh-token|private@example\.com/);
+  });
+});
+
+test("LinkedIn callback rejects invalid state before making a provider request", async () => {
+  await withLinkedInEnvironment(async () => {
+    let fetchCalled = false;
+    global.fetch = async () => {
+      fetchCalled = true;
+      return new Response();
+    };
+    const db = { query: async (sql:string) =>
+      sql.includes("UPDATE growth_os.social_oauth_authorisations") ? { rows:[] } : { rows:[] }
+    };
+    await assert.rejects(
+      completeSocialOAuth(workspaceId,userId,"linkedin","invalid-state","code",db as never),
+      (reason: unknown) => (reason as { code?:string }).code === "social_oauth_state_invalid"
+    );
+    assert.equal(fetchCalled,false);
+  });
+});
+
+test("LinkedIn callback rejects a missing authorization code", async () => {
+  await withLinkedInEnvironment(async () => {
+    const { db } = callbackDb();
+    await assert.rejects(
+      completeSocialOAuth(workspaceId,userId,"linkedin","valid-state","",db as never),
+      (reason: unknown) => (reason as { code?:string }).code === "social_oauth_code_missing"
+    );
+  });
+});
+
+test("LinkedIn authorization errors return a safe response and redact provider secrets", async () => {
+  await withLinkedInEnvironment(async () => {
+    const { db,queries } = callbackDb();
+    const providerValue = "access_denied linkedin-client-secret authorization-code";
+    await assert.rejects(
+      completeSocialOAuth(workspaceId,userId,"linkedin","valid-state","",db as never,providerValue),
+      (reason: unknown) => {
+        const error = reason as { code?:string; message?:string };
+        assert.equal(error.code,"social_oauth_provider_error");
+        assert.doesNotMatch(error.message ?? "",/secret|authorization-code/);
+        return true;
+      }
+    );
+    assert.doesNotMatch(JSON.stringify(queries),/linkedin-client-secret|authorization-code/);
+  });
+});
+
+test("LinkedIn token exchange failure is generic and does not attempt identity lookup", async () => {
+  await withLinkedInEnvironment(async () => {
+    let calls = 0;
+    global.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        error:"invalid_client",
+        error_description:"linkedin-client-secret valid-code"
+      }),{ status:401,headers:{ "Content-Type":"application/json" } });
+    };
+    const { db } = callbackDb();
+    await assert.rejects(
+      completeSocialOAuth(workspaceId,userId,"linkedin","valid-state","valid-code",db as never),
+      (reason: unknown) => {
+        const error = reason as { code?:string; message?:string };
+        return error.code === "linkedin_token_exchange_failed" &&
+          !/linkedin-client-secret|valid-code/.test(error.message ?? "");
+      }
+    );
+    assert.equal(calls,1);
+  });
+});
+
+test("LinkedIn identity lookup failure never persists the exchanged token", async () => {
+  await withLinkedInEnvironment(async () => {
+    let calls = 0;
+    global.fetch = async () => {
+      calls += 1;
+      if (calls === 1) return new Response(JSON.stringify({
+        access_token:"temporary-linkedin-token",
+        expires_in:3600,
+        scope:"openid profile email"
+      }),{ status:200,headers:{ "Content-Type":"application/json" } });
+      return new Response(JSON.stringify({ message:"denied" }),{
+        status:403,headers:{ "Content-Type":"application/json" }
+      });
+    };
+    const { db,queries } = callbackDb();
+    await assert.rejects(
+      completeSocialOAuth(workspaceId,userId,"linkedin","valid-state","valid-code",db as never),
+      (reason: unknown) => (reason as { code?:string }).code === "linkedin_identity_lookup_failed"
+    );
+    assert.equal(queries.some(item => item.sql.includes("INSERT INTO growth_os.social_connections")),false);
+    assert.doesNotMatch(JSON.stringify(queries),/temporary-linkedin-token/);
+  });
 });

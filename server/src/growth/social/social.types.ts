@@ -44,8 +44,10 @@ export type OAuthTokenResult = {
   refreshToken?: string;
   expiresAt?: Date;
   scopes: string[];
-  providerAccountId?: string;
-  providerAccountName?: string;
+  providerAccountId: string;
+  providerAccountName: string;
+  providerAccountType: "member" | "organization";
+  discoveredCapabilities: SocialCapability[];
 };
 
 export interface SocialProviderAdapter {
