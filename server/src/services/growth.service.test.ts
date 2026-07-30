@@ -132,6 +132,7 @@ test("mission control composes operational data in one response", async () => {
     if (sql.includes("FROM growth_os.metric_snapshots")) return { rows: [{ platform: "combined", snapshot_date: "2026-07-23", reach: 5 }] };
     if (sql.includes("'content' AS type")) return { rows: [{ id: RECORD_ID, type: "content", score: 30, reason: "Ready" }] };
     if (sql.includes("community_actions")) return { rows: [] };
+    if (sql.includes("information_schema.columns")) return { rows: [{ ready: false }] };
     if (sql.includes("FROM growth_os.social_connections")) return { rows: [] };
     if (sql.includes("SELECT id,title,status,scheduled_at")) return { rows: [] };
     if (sql.includes("FROM growth_os.follow_up_tasks f")) return { rows: [] };

@@ -288,6 +288,13 @@ router.use((
   if (error.code === "23503") {
     return res.status(400).json({ status: "error", code: "invalid_growth_reference", message: "A related Growth OS record does not exist" });
   }
+  if (error.code === "42703" || error.code === "42P01") {
+    return res.status(503).json({
+      status: "error",
+      code: "growth_phase5_migration_required",
+      message: "Growth OS is awaiting its Phase 5A database update. No data has been changed."
+    });
+  }
   if (!error.statusCode) return next(error);
   return res.status(error.statusCode).json({
     status: "error",

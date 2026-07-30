@@ -357,6 +357,34 @@ export const getMissionCandidates = async (
   now = new Date(),
   db: Db = pool
 ) => {
+  const phase5Schema = await db.query(`
+    SELECT
+      EXISTS(
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='growth_os'
+          AND table_name='daily_missions'
+          AND column_name='candidate_key'
+      )
+      AND to_regclass('growth_os.mission_candidate_dismissals') IS NOT NULL
+      AS ready
+  `);
+  const historyQuery = phase5Schema.rows[0]?.ready === true
+    ? db.query(`
+        SELECT candidate_key,status,completion_verification,completed_at,updated_at
+        FROM (
+          SELECT candidate_key,status,completion_verification,completed_at,updated_at
+          FROM growth_os.daily_missions
+          WHERE workspace_id=$1 AND candidate_key IS NOT NULL
+          UNION ALL
+          SELECT candidate_key,'skipped' AS status,NULL AS completion_verification,
+            NULL AS completed_at,dismissed_at AS updated_at
+          FROM growth_os.mission_candidate_dismissals
+          WHERE workspace_id=$1
+        ) candidate_history
+        ORDER BY updated_at DESC
+        LIMIT 250
+      `, [workspaceId])
+    : Promise.resolve({ rows: [] });
   const [
     social, content, campaign, sprint, followUps, unreviewed, qualifications,
     referrals, goals, insights, metrics, history
@@ -399,21 +427,7 @@ export const getMissionCandidates = async (
     db.query(`SELECT id,label,target_date,current_value,target_value FROM growth_os.goals WHERE workspace_id=$1 AND status='active'`, [workspaceId]),
     db.query(`SELECT id,title,recommended_decision,status FROM growth_os.insights WHERE workspace_id=$1 AND status='active' ORDER BY created_at LIMIT 20`, [workspaceId]),
     db.query(`SELECT max(snapshot_date)::text AS last_metric_date FROM growth_os.metric_snapshots WHERE workspace_id=$1`, [workspaceId]),
-    db.query(`
-      SELECT candidate_key,status,completion_verification,completed_at,updated_at
-      FROM (
-        SELECT candidate_key,status,completion_verification,completed_at,updated_at
-        FROM growth_os.daily_missions
-        WHERE workspace_id=$1 AND candidate_key IS NOT NULL
-        UNION ALL
-        SELECT candidate_key,'skipped' AS status,NULL AS completion_verification,
-          NULL AS completed_at,dismissed_at AS updated_at
-        FROM growth_os.mission_candidate_dismissals
-        WHERE workspace_id=$1
-      ) candidate_history
-      ORDER BY updated_at DESC
-      LIMIT 250
-    `, [workspaceId])
+    historyQuery
   ]);
   const configured = listSocialAdapters()
     .filter(adapter => validateSocialEnvironment(adapter.definition.id).available)

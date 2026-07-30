@@ -7,7 +7,8 @@ import {
   acceptMissionCandidate,
   completeMission,
   deriveMissionCandidates,
-  evaluateMissionCompletion
+  evaluateMissionCompletion,
+  getMissionCandidates
 } from "../growth/mission-candidate.service";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
@@ -219,4 +220,17 @@ test("duplicate active candidate acceptance returns a canonical conflict", async
 
 test("candidate engine has an honest empty state", () => {
   assert.deepEqual(deriveMissionCandidates(snapshot(), [], NOW), []);
+});
+
+test("candidate reads remain available before the Phase 5A migration", async () => {
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (sql.includes("information_schema.columns")) return { rows: [{ ready: false }] };
+    if (sql.includes("max(snapshot_date)")) return { rows: [{ last_metric_date: "2026-07-30" }] };
+    return { rows: [] };
+  }};
+  const candidates = await getMissionCandidates(WORKSPACE_ID, NOW, db as never);
+  assert.equal(candidates.some(item => item.candidate_type === "connect_linkedin"), true);
+  assert.equal(queries.some(sql => sql.includes("candidate_history")), false);
 });
