@@ -5,6 +5,7 @@ import {
   approvalMustReset,
   beginSocialOAuth,
   completeLinkedInOAuthFromState,
+  completeMetaOAuthFromState,
   completeSocialOAuth,
   getSocialProviderOverview,
   validatePublishReadiness
@@ -19,8 +20,10 @@ import {
 import { getSocialAdapter, listSocialAdapters, validateSocialEnvironment } from "../growth/social/social.registry";
 import {
   buildSocialOAuthRedirect,
-  handleLinkedInOAuthCallback
+  handleLinkedInOAuthCallback,
+  handleMetaOAuthCallback
 } from "../growth/social/social.routes";
+import { discoverMetaBusinessIdentities } from "../growth/social/meta.adapter";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -82,9 +85,38 @@ test("provider registry is complete and platform capability driven", () => {
   assert.deepEqual(listSocialAdapters().map(adapter => adapter.definition.id),[
     "linkedin","facebook","instagram","x","tiktok","snapchat"
   ]);
-  assert.ok(getSocialAdapter("instagram").definition.capabilities.includes("reels"));
+  assert.deepEqual(getSocialAdapter("facebook").definition.capabilities,[]);
+  assert.deepEqual(getSocialAdapter("instagram").definition.capabilities,[]);
+  assert.equal(getSocialAdapter("instagram").definition.futureReady,true);
   assert.ok(getSocialAdapter("x").definition.supportsPkce);
   assert.throws(() => getSocialAdapter("unofficial"));
+});
+
+test("Meta authorization requests identity and discovery permissions only", async () => {
+  const previous = { ...process.env };
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",
+    META_CLIENT_SECRET:"meta-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,12).toString("base64")
+  });
+  const queries: Array<{ sql:string; values:unknown[] }> = [];
+  const db = { query: async (sql:string,values:unknown[]=[]) => {
+    queries.push({ sql,values });
+    return { rows:[] };
+  }};
+  try {
+    const result = await beginSocialOAuth(workspaceId,userId,"facebook",db as never);
+    const url = new URL(result.authorization_url);
+    assert.equal(url.origin,"https://www.facebook.com");
+    assert.equal(url.pathname,"/v23.0/dialog/oauth");
+    assert.equal(url.searchParams.get("scope"),"public_profile pages_show_list instagram_basic");
+    assert.equal(url.searchParams.has("client_secret"),false);
+    for (const forbidden of [
+      "pages_manage_posts","pages_read_engagement","read_insights",
+      "instagram_content_publish","instagram_manage_insights"
+    ]) assert.doesNotMatch(url.searchParams.get("scope") ?? "",new RegExp(forbidden));
+  } finally { process.env = previous; }
 });
 
 test("missing provider environment marks only that provider unavailable", () => {
@@ -368,7 +400,8 @@ test("LinkedIn state callback atomically validates founder and workspace before 
     const stateUpdate = queries[0];
     assert.equal(String(stateUpdate.values[0]).length,64);
     assert.doesNotMatch(JSON.stringify(queries),/valid-state/);
-    assert.match(stateUpdate.sql,/a\.provider='linkedin'/);
+    assert.match(stateUpdate.sql,/a\.provider=\$2/);
+    assert.equal(stateUpdate.values[1],"linkedin");
     assert.match(stateUpdate.sql,/a\.consumed_at IS NULL/);
     assert.match(stateUpdate.sql,/a\.expires_at>now\(\)/);
     assert.match(stateUpdate.sql,/w\.owner_user_id=a\.initiated_by/);
@@ -590,6 +623,120 @@ test("valid LinkedIn callback verifies member identity and persists only encrypt
     assert.doesNotMatch(JSON.stringify(queries),/private@example\.com/);
     assert.doesNotMatch(JSON.stringify(result),/access-token|refresh-token|private@example\.com/);
   });
+});
+
+test("Meta callback is public, founder-state bound, and returns a safe frontend redirect", async () => {
+  let received:unknown[] = [];
+  let redirectStatus:number | undefined;
+  let redirectUrl = "";
+  const req = {
+    query:{ state:"meta-state",code:"meta-code",redirect_url:"https://attacker.example" },
+    headers:{}
+  } as never;
+  const res = {
+    redirect:(status:number,url:string) => {
+      redirectStatus=status;
+      redirectUrl=url;
+      return undefined;
+    }
+  } as never;
+  const complete = (async (...values:unknown[]) => {
+    received=values;
+    return { status:"connected" };
+  }) as never;
+  await handleMetaOAuthCallback(req,res,complete);
+  assert.deepEqual(received,["meta-state","meta-code",undefined]);
+  assert.equal(redirectStatus,303);
+  assert.equal(
+    redirectUrl,
+    "https://klps.co.uk/innovation-lab/growth/settings?social_provider=facebook&social_status=connected"
+  );
+  assert.doesNotMatch(redirectUrl,/attacker|meta-state|meta-code/);
+});
+
+test("Meta callback verifies identity, discovers Pages and Instagram, and persists no publishing capability", async () => {
+  const previousEnvironment = { ...process.env };
+  const previousFetch = global.fetch;
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",
+    META_CLIENT_SECRET:"meta-client-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,13).toString("base64")
+  });
+  const requests:string[] = [];
+  global.fetch = async (input: string | URL | Request) => {
+    const url = String(input);
+    requests.push(url);
+    if (requests.length === 1) return new Response(JSON.stringify({
+      access_token:"meta-access-token",expires_in:3600
+    }),{ status:200,headers:{ "Content-Type":"application/json" } });
+    if (url.includes("fields=id,name") && !url.includes("/accounts")) {
+      return new Response(JSON.stringify({ id:"meta-member-1",name:"Emma Mendez" }),{
+        status:200,headers:{ "Content-Type":"application/json" }
+      });
+    }
+    if (url.includes("/permissions")) return new Response(JSON.stringify({ data:[
+      { permission:"public_profile",status:"granted" },
+      { permission:"pages_show_list",status:"granted" },
+      { permission:"instagram_basic",status:"granted" }
+    ] }),{ status:200,headers:{ "Content-Type":"application/json" } });
+    return new Response(JSON.stringify({ data:[{
+      id:"page-1",name:"KLPS",
+      instagram_business_account:{ id:"ig-1",username:"klps" }
+    }] }),{ status:200,headers:{ "Content-Type":"application/json" } });
+  };
+  const connection = {
+    id:"33333333-3333-4333-8333-333333333333",
+    provider:"facebook",status:"connected",provider_account_name:"Emma Mendez",
+    provider_account_type:"member",granted_scopes:["public_profile","pages_show_list","instagram_basic"],
+    discovered_capabilities:[]
+  };
+  const queries: Array<{ sql:string; values:unknown[] }> = [];
+  const db = { query: async (sql:string,values:unknown[]=[]) => {
+    queries.push({ sql,values });
+    if (sql.includes("UPDATE growth_os.social_oauth_authorisations a")) return { rows:[{
+      workspace_id:workspaceId,initiated_by:userId,
+      redirect_uri:process.env.META_FACEBOOK_REDIRECT_URI,
+      encrypted_code_verifier:null
+    }] };
+    if (sql.includes("INSERT INTO growth_os.social_connections")) return { rows:[connection] };
+    return { rows:[] };
+  }};
+  try {
+    const result = await completeMetaOAuthFromState(
+      "valid-meta-state","valid-meta-code",undefined,db as never
+    );
+    assert.equal(result.status,"connected");
+    assert.equal(requests.length,4);
+    const connectionInsert = queries.find(item =>
+      item.sql.includes("INSERT INTO growth_os.social_connections")
+    )!;
+    assert.equal(connectionInsert.values[2],"meta-member-1");
+    assert.equal(connectionInsert.values[4],"member");
+    assert.deepEqual(connectionInsert.values[8],[
+      "public_profile","pages_show_list","instagram_basic"
+    ]);
+    assert.deepEqual(connectionInsert.values[9],[]);
+    assert.match(String(connectionInsert.values[5]),/^v1\./);
+    assert.doesNotMatch(JSON.stringify(result),/meta-access-token|meta-client-secret/);
+  } finally {
+    global.fetch=previousFetch;
+    process.env=previousEnvironment;
+  }
+});
+
+test("Meta business discovery returns Page and linked Instagram identities without content data", async () => {
+  const previousFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ data:[{
+    id:"page-1",name:"KLPS",
+    instagram_business_account:{ id:"ig-1",username:"klps" }
+  }] }),{ status:200,headers:{ "Content-Type":"application/json" } });
+  try {
+    assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[
+      { provider:"facebook",id:"page-1",name:"KLPS",parent_page_id:null },
+      { provider:"instagram",id:"ig-1",name:"klps",parent_page_id:"page-1" }
+    ]);
+  } finally { global.fetch=previousFetch; }
 });
 
 test("LinkedIn callback rejects invalid state before making a provider request", async () => {

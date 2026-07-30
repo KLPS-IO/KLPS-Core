@@ -5,6 +5,10 @@ import {
   SocialProviderDefinition
 } from "./social.types";
 import { exchangeLinkedInAuthorizationCode } from "./linkedin.adapter";
+import {
+  checkMetaIdentityHealth,
+  exchangeMetaAuthorizationCode
+} from "./meta.adapter";
 
 const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   linkedin: {
@@ -20,28 +24,32 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     externalReview: ["Enable Sign In with LinkedIn using OpenID Connect. Publishing products and permissions are not required for this connection."]
   },
   facebook: {
-    id: "facebook", name: "Facebook Pages",
+    id: "facebook", name: "Meta Identity",
     developerAccount: "Meta for Developers account",
-    applicationName: "Meta application connected to the KLPS Facebook Page",
+    applicationName: "Meta application for founder identity and business account discovery",
     authorizationUrl: "https://www.facebook.com/v23.0/dialog/oauth",
     tokenUrl: "https://graph.facebook.com/v23.0/oauth/access_token",
-    scopes: ["pages_show_list","pages_read_engagement","pages_manage_posts","read_insights"],
-    capabilities: ["text","images","video","clickable_links","scheduling","metrics","comment_retrieval","direct_publishing"],
+    scopes: ["public_profile","pages_show_list","instagram_basic"],
+    capabilities: [],
     requiredEnvironment: ["META_CLIENT_ID","META_CLIENT_SECRET","META_FACEBOOK_REDIRECT_URI"],
     supportsPkce: false,
-    externalReview: ["Complete Meta Business verification where required.", "Submit advanced permissions for App Review."]
+    externalReview: [
+      "Complete Meta Business verification where required.",
+      "Request only pages_show_list and instagram_basic for Page and Instagram professional identity discovery."
+    ]
   },
   instagram: {
     id: "instagram", name: "Instagram Professional",
     developerAccount: "Meta for Developers account",
     applicationName: "Meta application connected to an Instagram Professional account",
-    authorizationUrl: "https://www.facebook.com/v23.0/dialog/oauth",
-    tokenUrl: "https://graph.facebook.com/v23.0/oauth/access_token",
-    scopes: ["instagram_basic","instagram_content_publish","instagram_manage_insights","pages_show_list"],
-    capabilities: ["images","video","carousel","reels","metrics","comment_retrieval","direct_publishing"],
-    requiredEnvironment: ["META_CLIENT_ID","META_CLIENT_SECRET","META_INSTAGRAM_REDIRECT_URI"],
+    authorizationUrl: null,
+    tokenUrl: null,
+    scopes: [],
+    capabilities: [],
+    requiredEnvironment: [],
     supportsPkce: false,
-    externalReview: ["Connect Instagram Professional to a Facebook Page.", "Submit Instagram permissions for Meta App Review."]
+    externalReview: ["Instagram professional identities are discovered through the Meta Identity connection."],
+    futureReady: true
   },
   x: {
     id: "x", name: "X",
@@ -132,6 +140,9 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     if (definition.id === "linkedin") {
       return exchangeLinkedInAuthorizationCode(definition, providerEnv(definition.id), input);
     }
+    if (definition.id === "facebook") {
+      return exchangeMetaAuthorizationCode(definition, providerEnv(definition.id), input);
+    }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
   refreshToken: async () => {
@@ -143,7 +154,9 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
   publish: async () => {
     throw unavailable(`${definition.name} publishing is intentionally disabled in Phase 4A`);
   },
-  checkHealth: async () => ({ healthy: false, capabilities: definition.capabilities })
+  checkHealth: async accessToken => definition.id === "facebook"
+    ? checkMetaIdentityHealth(accessToken)
+    : { healthy: false, capabilities: definition.capabilities }
 });
 
 const registry = new Map<SocialProvider, SocialProviderAdapter>(
@@ -169,7 +182,7 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
       ? "Provider adapter reserved for future activation"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
-        : provider === "linkedin"
+        : provider === "linkedin" || provider === "facebook"
           ? "OAuth connection is configured"
           : "OAuth can be initiated; provider token exchange remains activation-gated"
   };

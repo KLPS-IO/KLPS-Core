@@ -38,7 +38,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
-    const providerActivated = definition.id === "linkedin" && environment.available;
+    const providerActivated = ["linkedin","facebook"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
       name: definition.name,
@@ -181,7 +181,11 @@ type OAuthAuthorisationRow = {
 const invalidState = (message = "OAuth state is invalid, expired or already used") =>
   socialError(message, "social_oauth_state_invalid", 409);
 
-const diagnoseLinkedInStateFailure = async (stateHash: string, db: Db): Promise<never> => {
+const diagnoseProviderStateFailure = async (
+  stateHash: string,
+  provider: SocialProvider,
+  db: Db
+): Promise<never> => {
   const result = await db.query(`
     SELECT
       a.provider,
@@ -198,7 +202,7 @@ const diagnoseLinkedInStateFailure = async (stateHash: string, db: Db): Promise<
     LIMIT 1
   `, [stateHash]);
   const row = result.rows[0];
-  if (!row || row.provider !== "linkedin") throw invalidState();
+  if (!row || row.provider !== provider) throw invalidState();
   if (row.expired) {
     throw socialError("OAuth state has expired", "social_oauth_state_expired", 409);
   }
@@ -220,7 +224,8 @@ const diagnoseLinkedInStateFailure = async (stateHash: string, db: Db): Promise<
   throw invalidState();
 };
 
-export const completeLinkedInOAuthFromState = async (
+export const completeSocialOAuthFromState = async (
+  provider: SocialProvider,
   state: string,
   code: string,
   providerError?: string,
@@ -233,7 +238,7 @@ export const completeLinkedInOAuthFromState = async (
     SET consumed_at=now()
     FROM growth_os.workspaces w
     JOIN data_room.users u ON u.id=w.owner_user_id
-    WHERE a.provider='linkedin'
+    WHERE a.provider=$2
       AND a.state_hash=$1
       AND a.consumed_at IS NULL
       AND a.expires_at>now()
@@ -246,13 +251,27 @@ export const completeLinkedInOAuthFromState = async (
       a.initiated_by,
       a.redirect_uri,
       a.encrypted_code_verifier
-  `, [stateHash]);
+  `, [stateHash,provider]);
   const row = authorisation.rows[0] as OAuthAuthorisationRow | undefined;
-  if (!row) await diagnoseLinkedInStateFailure(stateHash,db);
+  if (!row) await diagnoseProviderStateFailure(stateHash,provider,db);
   return completeSocialOAuthForAuthorisation(
-    row!,"linkedin",code,providerError,db
+    row!,provider,code,providerError,db
   );
 };
+
+export const completeLinkedInOAuthFromState = (
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool
+) => completeSocialOAuthFromState("linkedin",state,code,providerError,db);
+
+export const completeMetaOAuthFromState = (
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool
+) => completeSocialOAuthFromState("facebook",state,code,providerError,db);
 
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
@@ -320,7 +339,7 @@ const completeSocialOAuthForAuthorisation = async (
     return result.rows[0];
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
-      typeof reason.code === "string" && /^linkedin_[a-z_]+$/.test(reason.code)
+      typeof reason.code === "string" && /^(?:linkedin|meta)_[a-z_]+$/.test(reason.code)
       ? reason.code
       : "social_oauth_callback_failed";
     await db.query(`

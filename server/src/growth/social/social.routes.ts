@@ -5,6 +5,7 @@ import { getSocialAdapter } from "./social.registry";
 import {
   beginSocialOAuth,
   approveSocialContentVariant,
+  completeMetaOAuthFromState,
   completeLinkedInOAuthFromState,
   completeSocialOAuth,
   createPublishJob,
@@ -37,6 +38,10 @@ const SOCIAL_FAILURE_CODES = {
   social_oauth_code_missing:"missing_code",
   linkedin_token_exchange_failed:"provider_exchange_failed",
   linkedin_identity_lookup_failed:"identity_lookup_failed",
+  meta_token_exchange_failed:"provider_exchange_failed",
+  meta_identity_lookup_failed:"identity_lookup_failed",
+  meta_permission_lookup_failed:"permission_lookup_failed",
+  meta_page_discovery_failed:"identity_lookup_failed",
   social_oauth_binding_invalid:"connection_failed",
   social_oauth_callback_failed:"connection_failed"
 } as const;
@@ -60,12 +65,13 @@ const socialFrontendBase = () => {
 };
 
 export const buildSocialOAuthRedirect = (
-  result: { status:"connected" } | { status:"failed"; code:string }
+  result: { status:"connected" } | { status:"failed"; code:string },
+  provider: "linkedin" | "facebook" = "linkedin"
 ) => {
   const url = socialFrontendBase();
   url.search = "";
   url.hash = "";
-  url.searchParams.set("social_provider","linkedin");
+  url.searchParams.set("social_provider",provider);
   if (result.status === "connected") {
     url.searchParams.set("social_status","connected");
   } else {
@@ -78,6 +84,7 @@ export const buildSocialOAuthRedirect = (
 };
 
 type LinkedInCallbackCompleter = typeof completeLinkedInOAuthFromState;
+type MetaCallbackCompleter = typeof completeMetaOAuthFromState;
 
 export const handleLinkedInOAuthCallback = async (
   req: express.Request,
@@ -105,9 +112,40 @@ export const handleLinkedInOAuthCallback = async (
   }
 };
 
+export const handleMetaOAuthCallback = async (
+  req: express.Request,
+  res: express.Response,
+  complete: MetaCallbackCompleter = completeMetaOAuthFromState
+) => {
+  try {
+    await complete(
+      String(req.query.state ?? ""),
+      String(req.query.code ?? ""),
+      typeof req.query.error === "string" ? req.query.error : undefined
+    );
+    return res.redirect(303,buildSocialOAuthRedirect({ status:"connected" },"facebook"));
+  } catch (reason) {
+    const code = typeof reason === "object" && reason && "code" in reason &&
+      typeof reason.code === "string" ? reason.code : "social_oauth_callback_failed";
+    const safeCode = SOCIAL_FAILURE_CODES[code as keyof typeof SOCIAL_FAILURE_CODES] ??
+      "connection_failed";
+    console.warn(JSON.stringify({
+      event:"growth_social_oauth_callback_failed",
+      provider:"facebook",
+      reason:safeCode
+    }));
+    return res.redirect(303,buildSocialOAuthRedirect({ status:"failed",code },"facebook"));
+  }
+};
+
 socialOAuthCallbackRoutes.get(
   "/oauth/linkedin/callback",
   (req,res,next) => handleLinkedInOAuthCallback(req,res).catch(next)
+);
+
+socialOAuthCallbackRoutes.get(
+  "/oauth/facebook/callback",
+  (req,res,next) => handleMetaOAuthCallback(req,res).catch(next)
 );
 
 router.get("/providers", asyncHandler(async (req,res) => {
