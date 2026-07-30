@@ -10,6 +10,7 @@ import dataRoomRoutes from "./routes/data-room.routes";
 import financeRoutes from "./routes/finance.routes";
 import waitlistRoutes from "./routes/waitlist.routes";
 import growthRoutes from "./growth/growth.routes";
+import { getSocialStartupStatus } from "./growth/social/social.registry";
 import rdLabRoutes from "./rd-lab/rd-lab.routes";
 import {
   getSessionUser,
@@ -21,6 +22,13 @@ import { pool } from "./storage/postgres.client";
 import researchRoutes
   from "./routes/research.routes";
 const app = express();
+
+const socialStartupStatus = getSocialStartupStatus();
+console.info(JSON.stringify({
+  event: "growth_social_registry_ready",
+  available_providers: socialStartupStatus.filter(provider => provider.available).map(provider => provider.provider),
+  unavailable_providers: socialStartupStatus.filter(provider => !provider.available).map(provider => provider.provider)
+}));
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");

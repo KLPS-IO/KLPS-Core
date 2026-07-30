@@ -39,6 +39,7 @@ import {
   updateCommunityProfile,
   updateFollowUp
 } from "./community.service";
+import socialRoutes from "./social/social.routes";
 
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
@@ -64,6 +65,7 @@ export const requireGrowthFounder = (
 };
 
 router.use(requireDataRoomAuth, requireGrowthFounder);
+router.use("/social",socialRoutes);
 
 const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id);
 const param = (value: unknown) => Array.isArray(value) ? String(value[0]) : String(value);
