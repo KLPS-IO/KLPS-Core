@@ -28,13 +28,34 @@ test("Growth OS migration creates isolated schema, active-sprint uniqueness, ind
   }
 });
 
-test("Growth OS authorization permits founders and rejects other roles", () => {
+test("Funnel OS authorization permits founders and isolated Meta reviewers", () => {
   assert.doesNotThrow(() => requireFounderGrowth("founder_admin"));
+  assert.doesNotThrow(() => requireFounderGrowth("meta_reviewer"));
   assert.throws(
     () => requireFounderGrowth("authorised_user"),
     (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "growth_forbidden" &&
       (reason as { statusCode?: number }).statusCode === 403
   );
+});
+
+test("Meta reviewer migration, provisioning and route guards enforce isolation", () => {
+  const migration = readFileSync(join(process.cwd(), "server/sql/20260731_meta_reviewer.sql"), "utf8");
+  const bootstrap = readFileSync(join(process.cwd(), "scripts/bootstrap-meta-reviewer.ts"), "utf8");
+  const routes = readFileSync(join(process.cwd(), "server/src/growth/growth.routes.ts"), "utf8");
+  const social = readFileSync(join(process.cwd(), "server/src/growth/social/social.routes.ts"), "utf8");
+  const auth = readFileSync(join(process.cwd(), "server/src/rd-lab/rd-auth.service.ts"), "utf8");
+  assert.match(migration,/meta_reviewer/);
+  assert.match(migration,/is_active/);
+  assert.match(migration,/expires_at/);
+  assert.match(bootstrap,/META_REVIEWER_EMAIL/);
+  assert.match(bootstrap,/META_REVIEWER_PASSWORD/);
+  assert.doesNotMatch(bootstrap,/meta-review@klps\.co\.uk/i);
+  assert.match(routes,/reviewerAllowed/);
+  assert.match(routes,/reviewer_forbidden/);
+  assert.match(social,/oauth\\\/facebook\\\/start/);
+  assert.match(social,/connections\\\/facebook\\\/disconnect/);
+  assert.match(social,/reviewer_forbidden/);
+  assert.match(auth,/u\.expires_at IS NULL OR u\.expires_at>now/);
 });
 
 test("only one active sprint per workspace returns a canonical conflict", async () => {

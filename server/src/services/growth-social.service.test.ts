@@ -375,7 +375,7 @@ test("LinkedIn callback completes without a session cookie or Authorization head
   assert.equal(redirectStatus,303);
   assert.equal(
     redirectUrl,
-    "https://klps.co.uk/innovation-lab/growth/settings?social_provider=linkedin&social_status=connected"
+    "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=linkedin&social_status=connected"
   );
   assert.doesNotMatch(redirectUrl,/attacker|state-value|code-value/);
 });
@@ -503,14 +503,14 @@ test("invalid workspace or inactive initiator binding blocks LinkedIn exchange",
   }
 });
 
-test("OAuth redirects use only the allowlisted Growth settings route and safe result codes", () => {
+test("OAuth redirects use only the allowlisted Funnel settings route and safe result codes", () => {
   const previous=process.env.GROWTH_SOCIAL_FRONTEND_URL;
   process.env.GROWTH_SOCIAL_FRONTEND_URL="https://attacker.example/steal?token=private";
   try {
     const success=buildSocialOAuthRedirect({ status:"connected" });
     assert.equal(
       success,
-      "https://klps.co.uk/innovation-lab/growth/settings?social_provider=linkedin&social_status=connected"
+      "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=linkedin&social_status=connected"
     );
     const failure=buildSocialOAuthRedirect({
       status:"failed",
@@ -518,7 +518,7 @@ test("OAuth redirects use only the allowlisted Growth settings route and safe re
     });
     assert.equal(
       failure,
-      "https://klps.co.uk/innovation-lab/growth/settings?social_provider=linkedin&social_status=failed&social_error=connection_failed"
+      "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=linkedin&social_status=failed&social_error=connection_failed"
     );
     assert.doesNotMatch(failure,/private-token|raw-provider-error|attacker/);
   } finally {
@@ -556,7 +556,7 @@ test("callback failures expose only allowlisted codes and never raw LinkedIn err
     await handleLinkedInOAuthCallback(req,res,complete);
     assert.equal(
       redirectUrl,
-      "https://klps.co.uk/innovation-lab/growth/settings?social_provider=linkedin&social_status=failed&social_error=access_denied"
+      "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=linkedin&social_status=failed&social_error=access_denied"
     );
     assert.doesNotMatch(redirectUrl,/private-token|client-secret|description|state-value/);
     assert.deepEqual(warnings,[
@@ -649,7 +649,7 @@ test("Meta callback is public, founder-state bound, and returns a safe frontend 
   assert.equal(redirectStatus,303);
   assert.equal(
     redirectUrl,
-    "https://klps.co.uk/innovation-lab/growth/settings?social_provider=facebook&social_status=connected"
+    "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=facebook&social_status=connected"
   );
   assert.doesNotMatch(redirectUrl,/attacker|meta-state|meta-code/);
 });

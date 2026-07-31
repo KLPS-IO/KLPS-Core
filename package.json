@@ -29,6 +29,7 @@
     "lint": "echo 'Add ESLint later'",
     "test": "node --test -r ts-node/register server/src/services/*.test.ts",
     "bootstrap:rd-founder": "ts-node scripts/bootstrap-rd-founder.ts",
+    "bootstrap:meta-reviewer": "ts-node scripts/bootstrap-meta-reviewer.ts",
     "backup:data-room": "bash scripts/backup-data-room-db.sh",
     "restore:data-room": "bash scripts/restore-data-room-db.sh"
   },

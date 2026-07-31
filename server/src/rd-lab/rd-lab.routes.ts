@@ -1,7 +1,7 @@
 import express from "express";
 import {
   DataRoomRequest, clearSessionCookie, createSession, getIpAddress, getSessionUser,
-  requireDataRoomAuth, setSessionCookie
+  logAccessEvent, normalizeEmail, requireDataRoomAuth, setSessionCookie
 } from "../services/data-room.service";
 import { authenticateFounder } from "./rd-auth.service";
 import {
@@ -17,14 +17,18 @@ const asyncHandler=(fn:(req:DataRoomRequest,res:express.Response)=>Promise<unkno
 
 router.post("/auth/login",asyncHandler(async(req,res)=>{
   const user=await authenticateFounder(req.body?.email,req.body?.password,getIpAddress(req));
-  if(!user)return res.status(401).json({status:"error",code:"invalid_credentials",message:"Invalid email or password"});
+  if(!user){
+    await logAccessEvent({req,email:normalizeEmail(req.body?.email)||null,eventType:"login_failed",metadata:{surface:"funnel_os"}});
+    return res.status(401).json({status:"error",code:"invalid_credentials",message:"Invalid email or password"});
+  }
   await pool.query(`UPDATE data_room.sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`,[user.id]);
   const session=await createSession(req,user,req.body?.remember_device===true?1000*60*60*24*30:1000*60*60*12);
   setSessionCookie(res,session.token,session.expiresAt);
+  await logAccessEvent({req,user,eventType:"login_success",metadata:{surface:"funnel_os",reviewer:user.role==="meta_reviewer"}});
   return res.json({status:"success",user:{id:user.id,email:user.email,role:user.role},session:{expires_at:session.expiresAt.toISOString()}});
 }));
 router.get("/auth/session",asyncHandler(async(req,res)=>{
-  const session=await getSessionUser(req);if(!session||session.user.role!=="founder_admin")return res.status(401).json({status:"error",code:"unauthenticated",message:"Authentication required"});
+  const session=await getSessionUser(req);if(!session||!["founder_admin","meta_reviewer"].includes(session.user.role))return res.status(401).json({status:"error",code:"unauthenticated",message:"Authentication required"});
   return res.json({status:"success",user:{id:session.user.id,email:session.user.email,role:session.user.role}});
 }));
 router.post("/auth/logout",requireDataRoomAuth,asyncHandler(async(req,res)=>{

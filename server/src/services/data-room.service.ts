@@ -37,6 +37,7 @@ if (
 
 export type DataRoomRole =
   | "founder_admin"
+  | "meta_reviewer"
   | "authorised_user"
   | "pending_user"
   | "revoked_user";
@@ -436,6 +437,8 @@ export const getSessionUser = async (
       AND s.revoked_at IS NULL
       AND s.expires_at > now()
       AND u.role <> 'revoked_user'
+      AND COALESCE(u.is_active,true) = true
+      AND (u.expires_at IS NULL OR u.expires_at > now())
     LIMIT 1
     `,
     [hashSha256(token)]

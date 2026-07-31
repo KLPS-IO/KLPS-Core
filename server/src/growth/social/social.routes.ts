@@ -21,7 +21,7 @@ export const socialOAuthCallbackRoutes = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) =>
     Promise.resolve(handler(req as DataRoomRequest,res)).catch(next);
-const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id);
+const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id,undefined,req.dataRoomUser!.role);
 const providerFrom = (value: unknown) => {
   const provider = String(value);
   getSocialAdapter(provider);
@@ -29,7 +29,7 @@ const providerFrom = (value: unknown) => {
 };
 
 const SOCIAL_FRONTEND_ORIGIN = "https://klps.co.uk";
-const SOCIAL_FRONTEND_PATH = "/innovation-lab/growth/settings";
+const SOCIAL_FRONTEND_PATH = "/innovation-lab/funnel/settings";
 const SOCIAL_FAILURE_CODES = {
   social_oauth_provider_error:"access_denied",
   social_oauth_state_required:"invalid_state",
@@ -82,6 +82,16 @@ export const buildSocialOAuthRedirect = (
   }
   return url.toString();
 };
+
+router.use((req:DataRoomRequest,res,next)=>{
+  if(req.dataRoomUser?.role!=="meta_reviewer")return next();
+  const allowed =
+    (req.method==="GET" && req.path==="/providers") ||
+    (req.method==="POST" && /^\/oauth\/facebook\/start$/.test(req.path)) ||
+    (req.method==="POST" && /^\/connections\/facebook\/disconnect$/.test(req.path));
+  if(allowed)return next();
+  return res.status(403).json({status:"error",code:"reviewer_forbidden",message:"This action is not available in the review workspace"});
+});
 
 type LinkedInCallbackCompleter = typeof completeLinkedInOAuthFromState;
 type MetaCallbackCompleter = typeof completeMetaOAuthFromState;

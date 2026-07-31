@@ -45,6 +45,7 @@ import {
   completeMission,
   dismissMissionCandidate
 } from "./mission-candidate.service";
+import { pool } from "../storage/postgres.client";
 
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
@@ -75,7 +76,14 @@ router.use("/social",socialOAuthCallbackRoutes);
 router.use(requireDataRoomAuth, requireGrowthFounder);
 router.use("/social",socialRoutes);
 
-const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id);
+const reviewerAllowed = new Set(["GET /workspace","GET /strategy","GET /mission-control","GET /content"]);
+router.use((req:DataRoomRequest,res,next)=>{
+  if(req.dataRoomUser?.role!=="meta_reviewer")return next();
+  if(reviewerAllowed.has(`${req.method} ${req.path}`))return next();
+  return res.status(403).json({status:"error",code:"reviewer_forbidden",message:"This action is not available in the review workspace"});
+});
+
+const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id,pool,req.dataRoomUser!.role);
 const param = (value: unknown) => Array.isArray(value) ? String(value[0]) : String(value);
 
 router.get("/workspace", asyncHandler(async (req, res) => {

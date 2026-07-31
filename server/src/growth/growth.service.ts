@@ -138,14 +138,15 @@ export const validateGrowthPayload = (resource: GrowthResource, input: Input, pa
 };
 
 export const requireFounderGrowth = (role: unknown) => {
-  if (role !== "founder_admin") throw growthError("Founder/admin access is required", "growth_forbidden", 403);
+  if (!["founder_admin","meta_reviewer"].includes(String(role))) throw growthError("Funnel OS access is required", "growth_forbidden", 403);
 };
 
-export const ensureWorkspace = async (userId: string, db: Db = pool) => {
+export const ensureWorkspace = async (userId: string, db: Db = pool, role: unknown = "founder_admin") => {
+  const name = role === "meta_reviewer" ? "Meta Review Workspace" : "KLPS Funnel OS";
   const result = await db.query(
-    `INSERT INTO growth_os.workspaces(owner_user_id,name,timezone) VALUES($1,'KLPS Growth OS','Europe/London')
+    `INSERT INTO growth_os.workspaces(owner_user_id,name,timezone) VALUES($1,$2,'Europe/London')
      ON CONFLICT(owner_user_id) DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id RETURNING *`,
-    [userId]
+    [userId,name]
   );
   await db.query(`INSERT INTO growth_os.strategy(workspace_id) VALUES($1) ON CONFLICT(workspace_id) DO NOTHING`, [result.rows[0].id]);
   return result.rows[0];

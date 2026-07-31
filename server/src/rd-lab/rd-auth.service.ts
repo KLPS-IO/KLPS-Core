@@ -64,7 +64,11 @@ export async function authenticateFounder(email: unknown, password: unknown, ip:
   const result = await db.query(
     `SELECT u.id,u.email,u.role,u.access_tier,c.password_hash,c.locked_until
      FROM data_room.users u JOIN rd_lab.password_credentials c ON c.user_id=u.id
-     WHERE lower(u.email)=$1 AND u.role='founder_admin' LIMIT 1`, [normalized]
+     WHERE lower(u.email)=$1
+       AND u.role IN ('founder_admin','meta_reviewer')
+       AND COALESCE(u.is_active,true)=true
+       AND (u.expires_at IS NULL OR u.expires_at>now())
+     LIMIT 1`, [normalized]
   );
   const row = result.rows[0];
   const valid = row && (!row.locked_until || new Date(row.locked_until) <= new Date()) &&
