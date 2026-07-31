@@ -191,4 +191,4 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
 export const getSocialStartupStatus = () => SOCIAL_PROVIDERS.map(provider => ({
   provider,
   ...validateSocialEnvironment(provider)
-}));
+})); 
