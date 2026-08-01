@@ -48,6 +48,15 @@ export type OAuthTokenResult = {
   providerAccountName: string;
   providerAccountType: "member" | "organization";
   discoveredCapabilities: SocialCapability[];
+  discoveredAssets: SocialDiscoveredAsset[];
+};
+
+export type SocialDiscoveredAsset = {
+  provider: "facebook" | "instagram";
+  providerAssetType: "page" | "instagram_professional";
+  providerAssetId: string;
+  providerAssetName: string;
+  providerAssetUsername: string | null;
 };
 
 export interface SocialProviderAdapter {

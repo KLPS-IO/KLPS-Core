@@ -7,6 +7,7 @@ import {
   completeLinkedInOAuthFromState,
   completeMetaOAuthFromState,
   completeSocialOAuth,
+  disconnectSocialProvider,
   getSocialProviderOverview,
   validatePublishReadiness
 } from "../growth/social/social.service";
@@ -56,6 +57,41 @@ test("LinkedIn activation migration adds an explicit member or organization acco
   assert.match(sql,/provider_account_type IN \('member','organization'\)/);
   assert.match(sql,/COMMIT;/);
   assert.doesNotMatch(sql,/\bINSERT\b|\bDELETE\b|\bTRUNCATE\b/i);
+});
+
+test("social asset migration is additive, isolated and seeds no provider data", () => {
+  const sql = readFileSync("server/sql/20260801_social_connection_assets.sql","utf8");
+  assert.match(sql,/^BEGIN;/m);
+  assert.match(sql,/CREATE TABLE growth_os\.social_connection_assets/);
+  assert.match(sql,/FOREIGN KEY \(workspace_id,social_connection_id\)/);
+  assert.match(sql,/UNIQUE \(social_connection_id,provider,provider_asset_type,provider_asset_id\)/);
+  assert.match(sql,/provider_asset_username/);
+  assert.match(sql,/^COMMIT;/m);
+  assert.doesNotMatch(sql,/\bINSERT\b|\bTRUNCATE\b|\bDROP\b/i);
+});
+
+test("asset replacement is transaction-bound so failed reconnects preserve prior assets", () => {
+  const service = readFileSync("server/src/growth/social/social.service.ts","utf8");
+  assert.match(service,/await client\.query\("BEGIN"\)/);
+  assert.match(service,/await client\.query\("ROLLBACK"\)/);
+  const removal = service.indexOf("DELETE FROM growth_os.social_connection_assets");
+  const insertion = service.indexOf("INSERT INTO growth_os.social_connection_assets");
+  assert.ok(removal > 0 && insertion > removal);
+});
+
+test("disconnect removes only assets belonging to the disconnected workspace connection", async () => {
+  const queries:Array<{sql:string;values:unknown[]}> = [];
+  const db = { query:async (sql:string,values:unknown[]=[]) => {
+    queries.push({sql,values});
+    if (sql.includes("UPDATE growth_os.social_connections")) return {rows:[{
+      id:"33333333-3333-4333-8333-333333333333",provider:"facebook",status:"revoked"
+    }]};
+    return {rows:[]};
+  }};
+  const result = await disconnectSocialProvider(workspaceId,userId,"facebook",db as never);
+  assert.equal(result.status,"revoked");
+  const deletion = queries.find(item => item.sql.includes("DELETE FROM growth_os.social_connection_assets"))!;
+  assert.deepEqual(deletion.values,[workspaceId,"33333333-3333-4333-8333-333333333333"]);
 });
 
 test("token encryption is authenticated and tokens do not remain plaintext", () => {
@@ -177,6 +213,29 @@ test("configured LinkedIn activation reports its setup checklist as complete", a
     assert.ok(linkedin.setup_checklist.every(item => item.status === "configured"));
     assert.deepEqual(linkedin.capabilities,[]);
   } finally { process.env = previous; }
+});
+
+test("provider overview returns only workspace-scoped safe asset metadata", async () => {
+  const db = { query: async (sql:string,values:unknown[]) => {
+    assert.deepEqual(values,[workspaceId]);
+    if (sql.includes("FROM growth_os.social_connections")) return { rows:[{
+      id:"33333333-3333-4333-8333-333333333333",provider:"facebook",
+      provider_account_name:"Emma Mendez",provider_account_type:"member",status:"connected",
+      granted_scopes:["public_profile","pages_show_list","instagram_basic"],
+      discovered_capabilities:[],last_successful_check_at:null,last_error_code:null,
+      last_error_at:null,connected_at:null,token_expires_at:null
+    }] };
+    return { rows:[{
+      social_connection_id:"33333333-3333-4333-8333-333333333333",
+      provider:"facebook",provider_asset_type:"page",provider_asset_id:"page-1",
+      provider_asset_name:"KLPS",provider_asset_username:null,status:"active",
+      discovered_at:"2026-08-01T00:00:00.000Z",updated_at:"2026-08-01T00:00:00.000Z"
+    }] };
+  }};
+  const overview = await getSocialProviderOverview(workspaceId,db as never);
+  const facebook = overview.find(provider => provider.provider === "facebook")!;
+  assert.equal(facebook.connection?.assets[0].provider_asset_name,"KLPS");
+  assert.doesNotMatch(JSON.stringify(facebook.connection),/encrypted_|access_token|refresh_token|raw_provider/i);
 });
 
 test("OAuth restart preserves an existing encrypted connection until replacement succeeds", async () => {
@@ -405,7 +464,7 @@ test("LinkedIn state callback atomically validates founder and workspace before 
     assert.match(stateUpdate.sql,/a\.consumed_at IS NULL/);
     assert.match(stateUpdate.sql,/a\.expires_at>now\(\)/);
     assert.match(stateUpdate.sql,/w\.owner_user_id=a\.initiated_by/);
-    assert.match(stateUpdate.sql,/u\.role='founder_admin'/);
+    assert.match(stateUpdate.sql,/u\.role IN \('founder_admin','meta_reviewer'\)/);
     const connectionInsert = queries.find(item =>
       item.sql.includes("INSERT INTO growth_os.social_connections")
     )!;
@@ -415,6 +474,8 @@ test("LinkedIn state callback atomically validates founder and workspace before 
       "state-bound-token"
     );
     assert.deepEqual(connectionInsert.values[9],[]);
+    assert.ok(queries.some(item => item.sql.includes("DELETE FROM growth_os.social_connection_assets")));
+    assert.ok(!queries.some(item => item.sql.includes("INSERT INTO growth_os.social_connection_assets")));
     assert.equal(calls,2);
   });
 });
@@ -620,6 +681,8 @@ test("valid LinkedIn callback verifies member identity and persists only encrypt
     assert.equal(decryptSocialSecret(String(connectionInsert.values[6])),"linkedin-refresh-token");
     assert.deepEqual(connectionInsert.values[8],["openid","profile"]);
     assert.deepEqual(connectionInsert.values[9],[]);
+    assert.ok(queries.some(item => item.sql.includes("DELETE FROM growth_os.social_connection_assets")));
+    assert.ok(!queries.some(item => item.sql.includes("INSERT INTO growth_os.social_connection_assets")));
     assert.doesNotMatch(JSON.stringify(queries),/private@example\.com/);
     assert.doesNotMatch(JSON.stringify(result),/access-token|refresh-token|private@example\.com/);
   });
@@ -717,6 +780,21 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
       "public_profile","pages_show_list","instagram_basic"
     ]);
     assert.deepEqual(connectionInsert.values[9],[]);
+    const assetInsert = queries.find(item =>
+      item.sql.includes("INSERT INTO growth_os.social_connection_assets")
+    )!;
+    assert.deepEqual(JSON.parse(String(assetInsert.values[2])),[
+      {
+        provider:"facebook",provider_asset_type:"page",provider_asset_id:"page-1",
+        provider_asset_name:"KLPS",provider_asset_username:null
+      },
+      {
+        provider:"instagram",provider_asset_type:"instagram_professional",provider_asset_id:"ig-1",
+        provider_asset_name:"klps",provider_asset_username:"klps"
+      }
+    ]);
+    assert.ok(queries.some(item => item.sql.includes("DELETE FROM growth_os.social_connection_assets")));
+    assert.match(assetInsert.sql,/ON CONFLICT\(social_connection_id,provider,provider_asset_type,provider_asset_id\)/);
     assert.match(String(connectionInsert.values[5]),/^v1\./);
     assert.doesNotMatch(JSON.stringify(result),/meta-access-token|meta-client-secret/);
   } finally {
@@ -733,9 +811,38 @@ test("Meta business discovery returns Page and linked Instagram identities witho
   }] }),{ status:200,headers:{ "Content-Type":"application/json" } });
   try {
     assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[
-      { provider:"facebook",id:"page-1",name:"KLPS",parent_page_id:null },
-      { provider:"instagram",id:"ig-1",name:"klps",parent_page_id:"page-1" }
+      {
+        provider:"facebook",providerAssetType:"page",providerAssetId:"page-1",
+        providerAssetName:"KLPS",providerAssetUsername:null
+      },
+      {
+        provider:"instagram",providerAssetType:"instagram_professional",providerAssetId:"ig-1",
+        providerAssetName:"klps",providerAssetUsername:"klps"
+      }
     ]);
+  } finally { global.fetch=previousFetch; }
+});
+
+test("Meta business discovery truthfully supports a Page without linked Instagram", async () => {
+  const previousFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ data:[{
+    id:"page-1",name:"KLPS"
+  }] }),{ status:200,headers:{ "Content-Type":"application/json" } });
+  try {
+    assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[{
+      provider:"facebook",providerAssetType:"page",providerAssetId:"page-1",
+      providerAssetName:"KLPS",providerAssetUsername:null
+    }]);
+  } finally { global.fetch=previousFetch; }
+});
+
+test("Meta business discovery truthfully supports no managed Page", async () => {
+  const previousFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ data:[] }),{
+    status:200,headers:{ "Content-Type":"application/json" }
+  });
+  try {
+    assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[]);
   } finally { global.fetch=previousFetch; }
 });
 

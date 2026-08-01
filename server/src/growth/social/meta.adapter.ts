@@ -2,6 +2,7 @@ import {
   OAuthTokenResult,
   ProviderEnvironment,
   SocialCapability,
+  SocialDiscoveredAsset,
   SocialProviderDefinition
 } from "./social.types";
 
@@ -33,12 +34,7 @@ type MetaPage = {
   };
 };
 
-export type MetaDiscoveredIdentity = {
-  provider: "facebook" | "instagram";
-  id: string;
-  name: string;
-  parent_page_id: string | null;
-};
+export type MetaDiscoveredIdentity = SocialDiscoveredAsset;
 
 const metaError = (message: string, code: string, statusCode = 502) =>
   Object.assign(new Error(message), { code, statusCode });
@@ -89,18 +85,20 @@ export const discoverMetaBusinessIdentities = async (
     if (!pageId || !pageName) continue;
     identities.push({
       provider: "facebook",
-      id: pageId,
-      name: pageName,
-      parent_page_id: null
+      providerAssetType: "page",
+      providerAssetId: pageId,
+      providerAssetName: pageName,
+      providerAssetUsername: null
     });
     const instagramId = nonEmpty(page.instagram_business_account?.id);
-    const instagramName = nonEmpty(page.instagram_business_account?.username)
-      ?? nonEmpty(page.instagram_business_account?.name);
+    const instagramUsername = nonEmpty(page.instagram_business_account?.username);
+    const instagramName = nonEmpty(page.instagram_business_account?.name) ?? instagramUsername;
     if (instagramId && instagramName) identities.push({
       provider: "instagram",
-      id: instagramId,
-      name: instagramName,
-      parent_page_id: pageId
+      providerAssetType: "instagram_professional",
+      providerAssetId: instagramId,
+      providerAssetName: instagramName,
+      providerAssetUsername: instagramUsername
     });
   }
   return identities;
@@ -161,7 +159,7 @@ export const exchangeMetaAuthorizationCode = async (
   }
 
   const scopes = await grantedMetaScopes(tokenPayload.access_token);
-  await discoverMetaBusinessIdentities(tokenPayload.access_token);
+  const discoveredAssets = await discoverMetaBusinessIdentities(tokenPayload.access_token);
   const expiresIn = typeof tokenPayload.expires_in === "number" && tokenPayload.expires_in > 0
     ? tokenPayload.expires_in
     : undefined;
@@ -174,7 +172,8 @@ export const exchangeMetaAuthorizationCode = async (
     providerAccountName: identityName,
     providerAccountType: "member",
     // Identity and account discovery do not imply publishing or management rights.
-    discoveredCapabilities: []
+    discoveredCapabilities: [],
+    discoveredAssets
   };
 };
 

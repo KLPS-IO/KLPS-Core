@@ -124,6 +124,7 @@ export const exchangeLinkedInAuthorizationCode = async (
     providerAccountName: accountName,
     providerAccountType: "member",
     // Identity activation does not imply member or organisation publishing rights.
-    discoveredCapabilities: []
+    discoveredCapabilities: [],
+    discoveredAssets: []
   };
 };

@@ -26,6 +26,23 @@ const safeText = (value: unknown, field: string, limit = 1000) => {
   return value.trim().slice(0, limit);
 };
 
+const inTransaction = async <T>(db: Db, work: (transaction: Db) => Promise<T>) => {
+  const transactional = db as Db & { connect?: () => Promise<PoolClient> };
+  if (typeof transactional.connect !== "function") return work(db);
+  const client = await transactional.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (reason) {
+    await client.query("ROLLBACK");
+    throw reason;
+  } finally {
+    client.release();
+  }
+};
+
 export const getSocialProviderOverview = async (workspaceId: string, db: Db = pool) => {
   const connectionResult = await db.query(`
     SELECT id,provider,provider_account_name,provider_account_type,status,granted_scopes,
@@ -33,7 +50,23 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       connected_at,token_expires_at
     FROM growth_os.social_connections WHERE workspace_id=$1
   `, [workspaceId]);
-  const connections = new Map(connectionResult.rows.map(row => [row.provider, row]));
+  const assetResult = await db.query(`
+    SELECT social_connection_id,provider,provider_asset_type,provider_asset_id,
+      provider_asset_name,provider_asset_username,status,discovered_at,updated_at
+    FROM growth_os.social_connection_assets
+    WHERE workspace_id=$1
+    ORDER BY provider_asset_type,provider_asset_name,provider_asset_id
+  `, [workspaceId]);
+  const assetsByConnection = new Map<string, unknown[]>();
+  for (const asset of assetResult.rows) {
+    const current = assetsByConnection.get(asset.social_connection_id) ?? [];
+    current.push(asset);
+    assetsByConnection.set(asset.social_connection_id,current);
+  }
+  const connections = new Map(connectionResult.rows.map(row => [row.provider, {
+    ...row,
+    assets: assetsByConnection.get(row.id) ?? []
+  }]));
   return listSocialAdapters().map(adapter => {
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
@@ -210,7 +243,7 @@ const diagnoseProviderStateFailure = async (
   if (
     !row.workspace_exists ||
     !row.initiator_exists ||
-    row.role !== "founder_admin" ||
+    !["founder_admin","meta_reviewer"].includes(row.role) ||
     !row.initiator_owns_workspace
   ) {
     throw socialError(
@@ -245,7 +278,7 @@ export const completeSocialOAuthFromState = async (
       AND w.id=a.workspace_id
       AND w.owner_user_id=a.initiated_by
       AND u.id=a.initiated_by
-      AND u.role='founder_admin'
+      AND u.role IN ('founder_admin','meta_reviewer')
     RETURNING
       a.workspace_id,
       a.initiated_by,
@@ -308,7 +341,15 @@ const completeSocialOAuthForAuthorisation = async (
     const token = await adapter.exchangeAuthorizationCode({
       code,codeVerifier:verifier,redirectUri:row.redirect_uri
     });
-    const result = await db.query(`
+    const assets = token.discoveredAssets.map(asset => ({
+      provider:asset.provider,
+      provider_asset_type:asset.providerAssetType,
+      provider_asset_id:asset.providerAssetId,
+      provider_asset_name:asset.providerAssetName,
+      provider_asset_username:asset.providerAssetUsername
+    }));
+    return await inTransaction(db,async transaction => {
+      const result = await transaction.query(`
       INSERT INTO growth_os.social_connections(
         workspace_id,provider,provider_account_id,provider_account_name,provider_account_type,status,
         encrypted_access_token,encrypted_refresh_token,token_expires_at,
@@ -330,13 +371,36 @@ const completeSocialOAuthForAuthorisation = async (
       RETURNING id,provider,status,provider_account_name,provider_account_type,granted_scopes,
         discovered_capabilities,last_successful_check_at,connected_at
     `, [
-      workspaceId,provider,token.providerAccountId,token.providerAccountName,token.providerAccountType,
-      encryptSocialSecret(token.accessToken),
-      token.refreshToken ? encryptSocialSecret(token.refreshToken) : null,
-      token.expiresAt?.toISOString() ?? null,token.scopes,token.discoveredCapabilities,userId
-    ]);
-    await audit(workspaceId,userId,provider,"oauth_callback","success",{},db);
-    return result.rows[0];
+        workspaceId,provider,token.providerAccountId,token.providerAccountName,token.providerAccountType,
+        encryptSocialSecret(token.accessToken),
+        token.refreshToken ? encryptSocialSecret(token.refreshToken) : null,
+        token.expiresAt?.toISOString() ?? null,token.scopes,token.discoveredCapabilities,userId
+      ]);
+      const connection = result.rows[0];
+      await transaction.query(`
+        DELETE FROM growth_os.social_connection_assets
+        WHERE workspace_id=$1 AND social_connection_id=$2
+      `,[workspaceId,connection.id]);
+      if (assets.length) await transaction.query(`
+        INSERT INTO growth_os.social_connection_assets(
+          workspace_id,social_connection_id,provider,provider_asset_type,
+          provider_asset_id,provider_asset_name,provider_asset_username,status,
+          discovered_at,updated_at
+        )
+        SELECT $1,$2,a.provider,a.provider_asset_type,a.provider_asset_id,
+          a.provider_asset_name,a.provider_asset_username,'active',now(),now()
+        FROM jsonb_to_recordset($3::jsonb) AS a(
+          provider text,provider_asset_type text,provider_asset_id text,
+          provider_asset_name text,provider_asset_username text
+        )
+        ON CONFLICT(social_connection_id,provider,provider_asset_type,provider_asset_id)
+        DO UPDATE SET provider_asset_name=EXCLUDED.provider_asset_name,
+          provider_asset_username=EXCLUDED.provider_asset_username,
+          status='active',discovered_at=now(),updated_at=now()
+      `,[workspaceId,connection.id,JSON.stringify(assets)]);
+      await audit(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
+      return connection;
+    });
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
       typeof reason.code === "string" && /^(?:linkedin|meta)_[a-z_]+$/.test(reason.code)
@@ -359,17 +423,23 @@ export const disconnectSocialProvider = async (
   provider: SocialProvider,
   db: Db = pool
 ) => {
-  const result = await db.query(`
-    UPDATE growth_os.social_connections SET
-      status='revoked',encrypted_access_token=NULL,encrypted_refresh_token=NULL,
-      token_expires_at=NULL,granted_scopes='{}',discovered_capabilities='{}',
-      revoked_at=now()
-    WHERE workspace_id=$1 AND provider=$2
-    RETURNING id,provider,status,revoked_at
-  `, [workspaceId,provider]);
-  if (!result.rows[0]) throw socialError("Social connection not found", "social_connection_not_found", 404);
-  await audit(workspaceId,userId,provider,"connection_disconnect","success",{},db);
-  return result.rows[0];
+  return inTransaction(db,async transaction => {
+    const result = await transaction.query(`
+      UPDATE growth_os.social_connections SET
+        status='revoked',encrypted_access_token=NULL,encrypted_refresh_token=NULL,
+        token_expires_at=NULL,granted_scopes='{}',discovered_capabilities='{}',
+        revoked_at=now()
+      WHERE workspace_id=$1 AND provider=$2
+      RETURNING id,provider,status,revoked_at
+    `, [workspaceId,provider]);
+    if (!result.rows[0]) throw socialError("Social connection not found", "social_connection_not_found", 404);
+    await transaction.query(`
+      DELETE FROM growth_os.social_connection_assets
+      WHERE workspace_id=$1 AND social_connection_id=$2
+    `,[workspaceId,result.rows[0].id]);
+    await audit(workspaceId,userId,provider,"connection_disconnect","success",{},transaction);
+    return result.rows[0];
+  });
 };
 
 export type PublishReadiness = {
