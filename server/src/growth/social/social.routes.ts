@@ -15,6 +15,7 @@ import {
   upsertSocialContentVariant
 } from "./social.service";
 import { SocialProvider } from "./social.types";
+import { createMetaOAuthDiagnostics } from "./meta.diagnostics";
 
 const router = express.Router();
 export const socialOAuthCallbackRoutes = express.Router();
@@ -42,9 +43,29 @@ const SOCIAL_FAILURE_CODES = {
   meta_identity_lookup_failed:"identity_lookup_failed",
   meta_permission_lookup_failed:"permission_lookup_failed",
   meta_page_discovery_failed:"identity_lookup_failed",
+  meta_permissions_missing:"permission_lookup_failed",
+  meta_asset_persistence_failed:"connection_failed",
+  meta_connection_persistence_failed:"connection_failed",
   social_oauth_binding_invalid:"connection_failed",
   social_oauth_callback_failed:"connection_failed"
 } as const;
+
+const META_INTERNAL_ERROR_CODES:Record<string,string> = {
+  social_oauth_provider_error:"meta_access_denied",
+  social_oauth_state_required:"meta_state_invalid",
+  social_oauth_state_invalid:"meta_state_invalid",
+  social_oauth_state_expired:"meta_state_expired",
+  social_oauth_binding_invalid:"meta_state_invalid",
+  social_oauth_code_missing:"meta_unexpected_callback_failure",
+  meta_oauth_not_configured:"meta_token_exchange_failed",
+  meta_token_exchange_failed:"meta_token_exchange_failed",
+  meta_identity_lookup_failed:"meta_identity_lookup_failed",
+  meta_permission_lookup_failed:"meta_permissions_missing",
+  meta_permissions_missing:"meta_permissions_missing",
+  meta_page_discovery_failed:"meta_page_discovery_failed",
+  meta_asset_persistence_failed:"meta_asset_persistence_failed",
+  meta_connection_persistence_failed:"meta_connection_persistence_failed"
+};
 
 const socialFrontendBase = () => {
   const fallback = new URL(SOCIAL_FRONTEND_PATH,SOCIAL_FRONTEND_ORIGIN);
@@ -127,23 +148,24 @@ export const handleMetaOAuthCallback = async (
   res: express.Response,
   complete: MetaCallbackCompleter = completeMetaOAuthFromState
 ) => {
+  const diagnostics = createMetaOAuthDiagnostics();
+  diagnostics.emit("meta_oauth_callback_received",{ stage:"callback_received" });
   try {
     await complete(
       String(req.query.state ?? ""),
       String(req.query.code ?? ""),
-      typeof req.query.error === "string" ? req.query.error : undefined
+      typeof req.query.error === "string" ? req.query.error : undefined,
+      undefined,
+      diagnostics
     );
     return res.redirect(303,buildSocialOAuthRedirect({ status:"connected" },"facebook"));
   } catch (reason) {
     const code = typeof reason === "object" && reason && "code" in reason &&
       typeof reason.code === "string" ? reason.code : "social_oauth_callback_failed";
-    const safeCode = SOCIAL_FAILURE_CODES[code as keyof typeof SOCIAL_FAILURE_CODES] ??
-      "connection_failed";
-    console.warn(JSON.stringify({
-      event:"growth_social_oauth_callback_failed",
-      provider:"facebook",
-      reason:safeCode
-    }));
+    diagnostics.emit("meta_oauth_callback_redirected_with_error",{
+      internal_error_code:META_INTERNAL_ERROR_CODES[code] ?? "meta_unexpected_callback_failure",
+      stage:"callback_redirect",database_error_category:undefined
+    });
     return res.redirect(303,buildSocialOAuthRedirect({ status:"failed",code },"facebook"));
   }
 };

@@ -59,6 +59,21 @@ export type SocialDiscoveredAsset = {
   providerAssetUsername: string | null;
 };
 
+export type MetaOAuthDiagnosticDetails = {
+  internal_error_code?: string;
+  stage?: string;
+  meta_http_status?: number;
+  missing_permissions?: string[];
+  page_found?: boolean;
+  instagram_found?: boolean;
+  database_error_category?: string;
+};
+
+export type MetaOAuthDiagnostics = {
+  correlationId: string;
+  emit: (event: string, details?: MetaOAuthDiagnosticDetails) => void;
+};
+
 export interface SocialProviderAdapter {
   readonly definition: SocialProviderDefinition;
   getEnvironment(): ProviderEnvironment;
@@ -71,6 +86,7 @@ export interface SocialProviderAdapter {
     code: string;
     codeVerifier?: string;
     redirectUri: string;
+    diagnostics?: MetaOAuthDiagnostics;
   }): Promise<OAuthTokenResult>;
   refreshToken(refreshToken: string): Promise<OAuthTokenResult>;
   revokeToken(accessToken: string): Promise<void>;

@@ -10,7 +10,8 @@ import {
   hashOAuthState
 } from "./social.crypto";
 import { getSocialAdapter, listSocialAdapters, validateSocialEnvironment } from "./social.registry";
-import { SocialCapability, SocialProvider } from "./social.types";
+import { MetaOAuthDiagnostics, SocialCapability, SocialProvider } from "./social.types";
+import { safeDatabaseErrorCategory } from "./meta.diagnostics";
 
 type Db = Pick<PoolClient, "query">;
 type Input = Record<string, unknown>;
@@ -217,7 +218,8 @@ const invalidState = (message = "OAuth state is invalid, expired or already used
 const diagnoseProviderStateFailure = async (
   stateHash: string,
   provider: SocialProvider,
-  db: Db
+  db: Db,
+  diagnostics?: MetaOAuthDiagnostics
 ): Promise<never> => {
   const result = await db.query(`
     SELECT
@@ -235,17 +237,33 @@ const diagnoseProviderStateFailure = async (
     LIMIT 1
   `, [stateHash]);
   const row = result.rows[0];
-  if (!row || row.provider !== provider) throw invalidState();
+  if (!row || row.provider !== provider) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_state_invalid",stage:"state_validation"
+    });
+    throw invalidState();
+  }
   if (row.expired) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_state_expired",stage:"state_validation"
+    });
     throw socialError("OAuth state has expired", "social_oauth_state_expired", 409);
   }
-  if (row.consumed) throw invalidState();
+  if (row.consumed) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_state_invalid",stage:"state_validation"
+    });
+    throw invalidState();
+  }
   if (
     !row.workspace_exists ||
     !row.initiator_exists ||
     !["founder_admin","meta_reviewer"].includes(row.role) ||
     !row.initiator_owns_workspace
   ) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_state_invalid",stage:"state_validation"
+    });
     throw socialError(
       "OAuth founder or workspace binding is no longer authorised",
       "social_oauth_binding_invalid",
@@ -262,9 +280,15 @@ export const completeSocialOAuthFromState = async (
   state: string,
   code: string,
   providerError?: string,
-  db: Db = pool
+  db: Db = pool,
+  diagnostics?: MetaOAuthDiagnostics
 ) => {
-  if (!state) throw socialError("OAuth state is required", "social_oauth_state_required");
+  if (!state) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_state_invalid",stage:"state_validation"
+    });
+    throw socialError("OAuth state is required", "social_oauth_state_required");
+  }
   const stateHash = hashOAuthState(state);
   const authorisation = await db.query(`
     UPDATE growth_os.social_oauth_authorisations a
@@ -286,9 +310,10 @@ export const completeSocialOAuthFromState = async (
       a.encrypted_code_verifier
   `, [stateHash,provider]);
   const row = authorisation.rows[0] as OAuthAuthorisationRow | undefined;
-  if (!row) await diagnoseProviderStateFailure(stateHash,provider,db);
+  if (!row) await diagnoseProviderStateFailure(stateHash,provider,db,diagnostics);
+  diagnostics?.emit("meta_oauth_state_validated",{ stage:"state_validation" });
   return completeSocialOAuthForAuthorisation(
-    row!,provider,code,providerError,db
+    row!,provider,code,providerError,db,diagnostics
   );
 };
 
@@ -303,21 +328,26 @@ export const completeMetaOAuthFromState = (
   state: string,
   code: string,
   providerError?: string,
-  db: Db = pool
-) => completeSocialOAuthFromState("facebook",state,code,providerError,db);
+  db: Db = pool,
+  diagnostics?: MetaOAuthDiagnostics
+) => completeSocialOAuthFromState("facebook",state,code,providerError,db,diagnostics);
 
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
   provider: SocialProvider,
   code: string,
   providerError: string | undefined,
-  db: Db
+  db: Db,
+  diagnostics?: MetaOAuthDiagnostics
 ) => {
   const workspaceId = row.workspace_id;
   const userId = row.initiated_by;
   const adapter = getSocialAdapter(provider);
   const verifier = row.encrypted_code_verifier ? decryptSocialSecret(row.encrypted_code_verifier) : undefined;
   if (providerError) {
+    diagnostics?.emit("meta_oauth_state_rejected",{
+      internal_error_code:"meta_access_denied",stage:"provider_authorization"
+    });
     await db.query(`
       UPDATE growth_os.social_connections
       SET status=CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END,
@@ -328,6 +358,9 @@ const completeSocialOAuthForAuthorisation = async (
     throw socialError(`${adapter.definition.name} authorisation was not completed`, "social_oauth_provider_error");
   }
   if (!code) {
+    diagnostics?.emit("meta_oauth_code_exchange_failed",{
+      internal_error_code:"meta_unexpected_callback_failure",stage:"code_exchange"
+    });
     await db.query(`
       UPDATE growth_os.social_connections
       SET status=CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END,
@@ -339,7 +372,7 @@ const completeSocialOAuthForAuthorisation = async (
   }
   try {
     const token = await adapter.exchangeAuthorizationCode({
-      code,codeVerifier:verifier,redirectUri:row.redirect_uri
+      code,codeVerifier:verifier,redirectUri:row.redirect_uri,diagnostics
     });
     const assets = token.discoveredAssets.map(asset => ({
       provider:asset.provider,
@@ -348,8 +381,12 @@ const completeSocialOAuthForAuthorisation = async (
       provider_asset_name:asset.providerAssetName,
       provider_asset_username:asset.providerAssetUsername
     }));
-    return await inTransaction(db,async transaction => {
-      const result = await transaction.query(`
+    const persistence:{ stage:"connection_persistence" | "asset_persistence" } = {
+      stage:"connection_persistence"
+    };
+    try {
+      const connection = await inTransaction(db,async transaction => {
+        const result = await transaction.query(`
       INSERT INTO growth_os.social_connections(
         workspace_id,provider,provider_account_id,provider_account_name,provider_account_type,status,
         encrypted_access_token,encrypted_refresh_token,token_expires_at,
@@ -376,12 +413,18 @@ const completeSocialOAuthForAuthorisation = async (
         token.refreshToken ? encryptSocialSecret(token.refreshToken) : null,
         token.expiresAt?.toISOString() ?? null,token.scopes,token.discoveredCapabilities,userId
       ]);
-      const connection = result.rows[0];
-      await transaction.query(`
+        const connection = result.rows[0];
+        persistence.stage="asset_persistence";
+        diagnostics?.emit("meta_oauth_asset_persistence_started",{
+          stage:"asset_persistence",
+          page_found:assets.some(asset => asset.provider === "facebook"),
+          instagram_found:assets.some(asset => asset.provider === "instagram")
+        });
+        await transaction.query(`
         DELETE FROM growth_os.social_connection_assets
         WHERE workspace_id=$1 AND social_connection_id=$2
       `,[workspaceId,connection.id]);
-      if (assets.length) await transaction.query(`
+        if (assets.length) await transaction.query(`
         INSERT INTO growth_os.social_connection_assets(
           workspace_id,social_connection_id,provider,provider_asset_type,
           provider_asset_id,provider_asset_name,provider_asset_username,status,
@@ -398,9 +441,33 @@ const completeSocialOAuthForAuthorisation = async (
           provider_asset_username=EXCLUDED.provider_asset_username,
           status='active',discovered_at=now(),updated_at=now()
       `,[workspaceId,connection.id,JSON.stringify(assets)]);
-      await audit(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
+        await audit(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
+        return connection;
+      });
+      diagnostics?.emit("meta_oauth_connection_completed",{
+        stage:"completed",
+        page_found:assets.some(asset => asset.provider === "facebook"),
+        instagram_found:assets.some(asset => asset.provider === "instagram")
+      });
       return connection;
-    });
+    } catch (reason) {
+      const internalCode = persistence.stage === "asset_persistence"
+        ? "meta_asset_persistence_failed" : "meta_connection_persistence_failed";
+      diagnostics?.emit(
+        persistence.stage === "asset_persistence"
+          ? "meta_oauth_asset_persistence_failed"
+          : "meta_oauth_connection_persistence_failed",
+        {
+          internal_error_code:internalCode,stage:persistence.stage,
+          database_error_category:safeDatabaseErrorCategory(reason),
+          page_found:assets.some(asset => asset.provider === "facebook"),
+          instagram_found:assets.some(asset => asset.provider === "instagram")
+        }
+      );
+      throw Object.assign(reason instanceof Error ? reason : new Error("Social connection persistence failed"),{
+        code:internalCode
+      });
+    }
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
       typeof reason.code === "string" && /^(?:linkedin|meta)_[a-z_]+$/.test(reason.code)

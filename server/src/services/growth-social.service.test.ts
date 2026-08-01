@@ -24,7 +24,8 @@ import {
   handleLinkedInOAuthCallback,
   handleMetaOAuthCallback
 } from "../growth/social/social.routes";
-import { discoverMetaBusinessIdentities } from "../growth/social/meta.adapter";
+import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
+import { createMetaOAuthDiagnostics } from "../growth/social/meta.diagnostics";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -115,6 +116,18 @@ test("OAuth state and PKCE values are high entropy and one-way comparable", () =
   assert.equal(hashOAuthState(first).length,64);
   assert.notEqual(hashOAuthState(first),first);
   assert.ok(createPkceChallenge(first).length >= 43);
+});
+
+test("Meta diagnostics allowlist fields and redact credentials and raw provider details", () => {
+  const lines:string[]=[];
+  const diagnostics=createMetaOAuthDiagnostics("correlation-1",line=>lines.push(line));
+  diagnostics.emit("meta_oauth_code_exchange_failed",{
+    internal_error_code:"meta_token_exchange_failed",stage:"code_exchange",meta_http_status:400,
+    code:"private-code",access_token:"private-token",raw_error:"provider detail"
+  } as never);
+  assert.equal(lines.length,1);
+  assert.match(lines[0],/"correlation_id":"correlation-1"/);
+  assert.doesNotMatch(lines[0],/private-code|private-token|provider detail|access_token|raw_error/);
 });
 
 test("provider registry is complete and platform capability driven", () => {
@@ -708,13 +721,46 @@ test("Meta callback is public, founder-state bound, and returns a safe frontend 
     return { status:"connected" };
   }) as never;
   await handleMetaOAuthCallback(req,res,complete);
-  assert.deepEqual(received,["meta-state","meta-code",undefined]);
+  assert.deepEqual(received.slice(0,3),["meta-state","meta-code",undefined]);
+  assert.equal(received[3],undefined);
+  assert.equal(typeof (received[4] as { correlationId?:unknown }).correlationId,"string");
   assert.equal(redirectStatus,303);
   assert.equal(
     redirectUrl,
     "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=facebook&social_status=connected"
   );
   assert.doesNotMatch(redirectUrl,/attacker|meta-state|meta-code/);
+});
+
+test("Meta callback error redirect and structured logs expose only controlled values", async () => {
+  const originalInfo=console.info;
+  const originalWarn=console.warn;
+  const lines:string[]=[];
+  console.info=(line?:unknown)=>lines.push(String(line));
+  console.warn=(line?:unknown)=>lines.push(String(line));
+  let redirectUrl="";
+  try {
+    await handleMetaOAuthCallback(
+      {query:{
+        state:"private-state",code:"private-code",error_description:"raw provider description"
+      }} as never,
+      {redirect:(_status:number,url:string)=>{redirectUrl=url;}} as never,
+      (async()=>{throw Object.assign(new Error("raw provider error"),{code:"meta_token_exchange_failed"});}) as never
+    );
+  } finally {
+    console.info=originalInfo;
+    console.warn=originalWarn;
+  }
+  assert.equal(
+    redirectUrl,
+    "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=facebook&social_status=failed&social_error=provider_exchange_failed"
+  );
+  const parsed=lines.map(line=>JSON.parse(line) as Record<string,unknown>);
+  assert.deepEqual(parsed.map(item=>item.event),[
+    "meta_oauth_callback_received","meta_oauth_callback_redirected_with_error"
+  ]);
+  assert.equal(parsed[0].correlation_id,parsed[1].correlation_id);
+  assert.doesNotMatch(lines.join("\n"),/private-state|private-code|raw provider|error_description/);
 });
 
 test("Meta callback verifies identity, discovers Pages and Instagram, and persists no publishing capability", async () => {
@@ -755,6 +801,8 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     discovered_capabilities:[]
   };
   const queries: Array<{ sql:string; values:unknown[] }> = [];
+  const diagnosticLines:string[]=[];
+  const diagnostics=createMetaOAuthDiagnostics("meta-success-correlation",line=>diagnosticLines.push(line));
   const db = { query: async (sql:string,values:unknown[]=[]) => {
     queries.push({ sql,values });
     if (sql.includes("UPDATE growth_os.social_oauth_authorisations a")) return { rows:[{
@@ -767,7 +815,7 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
   }};
   try {
     const result = await completeMetaOAuthFromState(
-      "valid-meta-state","valid-meta-code",undefined,db as never
+      "valid-meta-state","valid-meta-code",undefined,db as never,diagnostics
     );
     assert.equal(result.status,"connected");
     assert.equal(requests.length,4);
@@ -797,6 +845,9 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     assert.match(assetInsert.sql,/ON CONFLICT\(social_connection_id,provider,provider_asset_type,provider_asset_id\)/);
     assert.match(String(connectionInsert.values[5]),/^v1\./);
     assert.doesNotMatch(JSON.stringify(result),/meta-access-token|meta-client-secret/);
+    assert.ok(diagnosticLines.some(line => line.includes("meta_oauth_connection_completed")));
+    assert.ok(diagnosticLines.every(line => line.includes("meta-success-correlation")));
+    assert.doesNotMatch(diagnosticLines.join("\n"),/valid-meta-code|meta-access-token|meta-client-secret|meta-member-1|page-1|ig-1/);
   } finally {
     global.fetch=previousFetch;
     process.env=previousEnvironment;
@@ -844,6 +895,133 @@ test("Meta business discovery truthfully supports no managed Page", async () => 
   try {
     assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[]);
   } finally { global.fetch=previousFetch; }
+});
+
+test("Meta exchange failures emit stage-specific diagnostics without raw Meta errors", async () => {
+  const definition=getSocialAdapter("facebook").definition;
+  const environment={ clientId:"client",clientSecret:"secret",redirectUri:"https://api.example/callback" };
+  const cases:Array<{
+    name:string;
+    responses:Array<{status:number;body:unknown}>;
+    event:string;
+    code:string;
+  }>=[
+    {
+      name:"token",responses:[{status:400,body:{error:{message:"raw token error",code:190}}}],
+      event:"meta_oauth_code_exchange_failed",code:"meta_token_exchange_failed"
+    },
+    {
+      name:"identity",responses:[
+        {status:200,body:{access_token:"private-token"}},
+        {status:500,body:{error:{message:"raw identity error"}}}
+      ],event:"meta_oauth_identity_lookup_failed",code:"meta_identity_lookup_failed"
+    },
+    {
+      name:"permissions",responses:[
+        {status:200,body:{access_token:"private-token"}},
+        {status:200,body:{id:"private-member-id",name:"Reviewer"}},
+        {status:200,body:{data:[{permission:"public_profile",status:"granted"}]}}
+      ],event:"meta_oauth_permissions_missing",code:"meta_permissions_missing"
+    },
+    {
+      name:"page",responses:[
+        {status:200,body:{access_token:"private-token"}},
+        {status:200,body:{id:"private-member-id",name:"Reviewer"}},
+        {status:200,body:{data:[
+          {permission:"public_profile",status:"granted"},
+          {permission:"pages_show_list",status:"granted"},
+          {permission:"instagram_basic",status:"granted"}
+        ]}},
+        {status:500,body:{error:{message:"raw page error"}}}
+      ],event:"meta_oauth_page_discovery_failed",code:"meta_page_discovery_failed"
+    }
+  ];
+  const previousFetch=global.fetch;
+  try {
+    for (const item of cases) {
+      const responses=[...item.responses];
+      global.fetch=async () => {
+        const response=responses.shift()!;
+        return new Response(JSON.stringify(response.body),{
+          status:response.status,headers:{"Content-Type":"application/json"}
+        });
+      };
+      const lines:string[]=[];
+      const diagnostics=createMetaOAuthDiagnostics(`correlation-${item.name}`,line=>lines.push(line));
+      await assert.rejects(
+        exchangeMetaAuthorizationCode(definition,environment,{
+          code:"private-code",redirectUri:environment.redirectUri,diagnostics
+        })
+      );
+      const failure=lines.find(line=>line.includes(`"event":"${item.event}"`));
+      assert.ok(failure,`${item.name} failure event`);
+      assert.match(failure!,new RegExp(`"internal_error_code":"${item.code}"`));
+      assert.match(failure!,new RegExp(`"correlation_id":"correlation-${item.name}"`));
+      assert.doesNotMatch(lines.join("\n"),/private-code|private-token|private-member-id|raw .* error/i);
+    }
+  } finally { global.fetch=previousFetch; }
+});
+
+test("Meta callback state rejection and persistence failures emit controlled diagnostics", async () => {
+  const stateLines:string[]=[];
+  const stateDiagnostics=createMetaOAuthDiagnostics("correlation-state",line=>stateLines.push(line));
+  const invalidDb={query:async()=>({rows:[]})};
+  await assert.rejects(completeMetaOAuthFromState(
+    "private-state","private-code",undefined,invalidDb as never,stateDiagnostics
+  ));
+  assert.ok(stateLines.some(line => line.includes("meta_oauth_state_rejected") && line.includes("meta_state_invalid")));
+  assert.doesNotMatch(stateLines.join("\n"),/private-state|private-code/);
+
+  const previousEnvironment={...process.env};
+  const previousFetch=global.fetch;
+  Object.assign(process.env,{
+    META_CLIENT_ID:"client",META_CLIENT_SECRET:"secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,19).toString("base64")
+  });
+  try {
+    for (const failureStage of ["connection","asset"] as const) {
+      let request=0;
+      global.fetch=async () => {
+        request+=1;
+        if (request===1) return new Response(JSON.stringify({access_token:"private-token"}),{status:200});
+        if (request===2) return new Response(JSON.stringify({id:"private-member-id",name:"Reviewer"}),{status:200});
+        if (request===3) return new Response(JSON.stringify({data:[
+          {permission:"public_profile",status:"granted"},
+          {permission:"pages_show_list",status:"granted"},
+          {permission:"instagram_basic",status:"granted"}
+        ]}),{status:200});
+        return new Response(JSON.stringify({data:[{id:"private-page-id",name:"KLPS"}]}),{status:200});
+      };
+      const db={query:async(sql:string)=>{
+        if(sql.includes("UPDATE growth_os.social_oauth_authorisations a"))return{rows:[{
+          workspace_id:workspaceId,initiated_by:userId,redirect_uri:"https://api.example/callback",
+          encrypted_code_verifier:null
+        }]};
+        if(sql.includes("INSERT INTO growth_os.social_connections")){
+          if(failureStage==="connection")throw Object.assign(new Error("private database detail"),{code:"23505"});
+          return{rows:[{id:"33333333-3333-4333-8333-333333333333",status:"connected"}]};
+        }
+        if(failureStage==="asset"&&sql.includes("INSERT INTO growth_os.social_connection_assets")){
+          throw Object.assign(new Error("private database detail"),{code:"08006"});
+        }
+        return{rows:[]};
+      }};
+      const lines:string[]=[];
+      const diagnostics=createMetaOAuthDiagnostics(`correlation-${failureStage}`,line=>lines.push(line));
+      await assert.rejects(completeMetaOAuthFromState(
+        "private-state","private-code",undefined,db as never,diagnostics
+      ));
+      const expectedCode=failureStage==="connection"
+        ? "meta_connection_persistence_failed":"meta_asset_persistence_failed";
+      assert.ok(lines.some(line=>line.includes(expectedCode)));
+      assert.ok(lines.every(line=>line.includes(`correlation-${failureStage}`)));
+      assert.doesNotMatch(lines.join("\n"),/private-state|private-code|private-token|private-member-id|private-page-id|private database detail/);
+    }
+  } finally {
+    global.fetch=previousFetch;
+    process.env=previousEnvironment;
+  }
 });
 
 test("LinkedIn callback rejects invalid state before making a provider request", async () => {
