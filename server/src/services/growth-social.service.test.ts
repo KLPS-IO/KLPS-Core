@@ -25,7 +25,12 @@ import {
   handleMetaOAuthCallback
 } from "../growth/social/social.routes";
 import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
-import { createMetaOAuthDiagnostics } from "../growth/social/meta.diagnostics";
+import {
+  classifyMetaProviderError,
+  createMetaOAuthDiagnostics,
+  getMetaConfigurationDiagnostics,
+  safeMetaProviderError
+} from "../growth/social/meta.diagnostics";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -128,6 +133,70 @@ test("Meta diagnostics allowlist fields and redact credentials and raw provider 
   assert.equal(lines.length,1);
   assert.match(lines[0],/"correlation_id":"correlation-1"/);
   assert.doesNotMatch(lines[0],/private-code|private-token|provider detail|access_token|raw_error/);
+});
+
+test("Meta provider errors expose only allowlisted classification fields", () => {
+  const lines:string[]=[];
+  const diagnostics=createMetaOAuthDiagnostics("safe-provider-error",line=>lines.push(line));
+  diagnostics.emit("meta_oauth_code_exchange_failed",safeMetaProviderError({error:{
+    type:"OAuthException",code:190,error_subcode:36001,is_transient:false,
+    message:"private provider message",error_user_msg:"private user message",
+    error_user_title:"private title",fbtrace_id:"private trace"
+  }}));
+  const parsed=JSON.parse(lines[0]);
+  assert.equal(parsed.provider_error_type,"OAuthException");
+  assert.equal(parsed.provider_error_code,190);
+  assert.equal(parsed.provider_error_subcode,36001);
+  assert.equal(parsed.provider_error_transient,false);
+  assert.equal(parsed.provider_diagnosis,"code_already_used");
+  assert.doesNotMatch(lines[0],/private|message|trace|fbtrace/i);
+});
+
+test("Meta provider error categories cover credentials, expiry, redirect and unknown failures", () => {
+  assert.equal(classifyMetaProviderError(101),"invalid_client_credentials");
+  assert.equal(classifyMetaProviderError(190,36000),"invalid_or_expired_code");
+  assert.equal(classifyMetaProviderError(191),"redirect_uri_mismatch");
+  assert.equal(classifyMetaProviderError(999),"provider_token_failure_unclassified");
+});
+
+test("Meta configuration diagnostics detect whitespace and trailing-slash redirect mismatches", () => {
+  const previous={...process.env};
+  try {
+    process.env.META_CLIENT_ID="client ";
+    process.env.META_CLIENT_SECRET="secret";
+    process.env.META_FACEBOOK_REDIRECT_URI=
+      "https://klps-lema-production.up.railway.app/api/growth/social/oauth/facebook/callback/";
+    assert.equal(getMetaConfigurationDiagnostics().meta_redirect_equals_expected,false);
+    process.env.META_FACEBOOK_REDIRECT_URI=
+      " https://klps-lema-production.up.railway.app/api/growth/social/oauth/facebook/callback";
+    assert.equal(getMetaConfigurationDiagnostics().meta_redirect_equals_expected,false);
+  } finally { process.env=previous; }
+});
+
+test("Meta authorization and exchange use the same client ID source and identical redirect URI", async () => {
+  const previousEnvironment={...process.env};
+  const previousFetch=global.fetch;
+  const redirect="https://api.example.com/api/growth/social/oauth/facebook/callback";
+  Object.assign(process.env,{
+    META_CLIENT_ID:"one-client-source",META_CLIENT_SECRET:"private-secret",
+    META_FACEBOOK_REDIRECT_URI:redirect
+  });
+  let exchangeUrl:URL|undefined;
+  global.fetch=async input => {
+    exchangeUrl=new URL(String(input));
+    return new Response(JSON.stringify({error:{type:"OAuthException",code:101}}),{status:400});
+  };
+  try {
+    const adapter=getSocialAdapter("facebook");
+    const authorizationUrl=new URL(adapter.buildAuthorizationUrl({state:"private-state",redirectUri:redirect}));
+    await assert.rejects(adapter.exchangeAuthorizationCode({code:"private-code",redirectUri:redirect}));
+    assert.equal(authorizationUrl.searchParams.get("client_id"),exchangeUrl!.searchParams.get("client_id"));
+    assert.equal(authorizationUrl.searchParams.get("redirect_uri"),exchangeUrl!.searchParams.get("redirect_uri"));
+    assert.equal(exchangeUrl!.searchParams.get("redirect_uri"),redirect);
+  } finally {
+    global.fetch=previousFetch;
+    process.env=previousEnvironment;
+  }
 });
 
 test("provider registry is complete and platform capability driven", () => {

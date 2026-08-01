@@ -67,7 +67,21 @@ export type MetaOAuthDiagnosticDetails = {
   page_found?: boolean;
   instagram_found?: boolean;
   database_error_category?: string;
+  provider_error_type?: string;
+  provider_error_code?: number;
+  provider_error_subcode?: number;
+  provider_error_transient?: boolean;
+  provider_diagnosis?: MetaProviderDiagnosis;
 };
+
+export type MetaProviderDiagnosis =
+  | "invalid_client_credentials"
+  | "redirect_uri_mismatch"
+  | "invalid_or_expired_code"
+  | "code_already_used"
+  | "app_configuration_error"
+  | "provider_request_invalid"
+  | "provider_token_failure_unclassified";
 
 export type MetaOAuthDiagnostics = {
   correlationId: string;

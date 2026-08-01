@@ -1,5 +1,9 @@
 import crypto from "crypto";
-import { MetaOAuthDiagnosticDetails, MetaOAuthDiagnostics } from "./social.types";
+import {
+  MetaOAuthDiagnosticDetails,
+  MetaOAuthDiagnostics,
+  MetaProviderDiagnosis
+} from "./social.types";
 
 type DiagnosticSink = (line: string) => void;
 
@@ -24,12 +28,75 @@ export const createMetaOAuthDiagnostics = (
     if (typeof details.page_found === "boolean") payload.page_found=details.page_found;
     if (typeof details.instagram_found === "boolean") payload.instagram_found=details.instagram_found;
     if (details.database_error_category) payload.database_error_category=details.database_error_category;
+    if (details.provider_error_type) payload.provider_error_type=details.provider_error_type;
+    if (Number.isInteger(details.provider_error_code)) payload.provider_error_code=details.provider_error_code;
+    if (Number.isInteger(details.provider_error_subcode)) payload.provider_error_subcode=details.provider_error_subcode;
+    if (typeof details.provider_error_transient === "boolean") payload.provider_error_transient=details.provider_error_transient;
+    if (details.provider_diagnosis) payload.provider_diagnosis=details.provider_diagnosis;
     const line = JSON.stringify(payload);
     if (sink) sink(line);
     else if (failureEvent(event)) console.warn(line);
     else console.info(line);
   }
 });
+
+const safeInteger = (value: unknown) => Number.isInteger(value) ? value as number : undefined;
+const safeType = (value: unknown) =>
+  typeof value === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(value)
+    ? value
+    : undefined;
+
+export const classifyMetaProviderError = (
+  code?: number,
+  subcode?: number
+): MetaProviderDiagnosis => {
+  if (code === 101 || code === 102) return "invalid_client_credentials";
+  if (code === 191) return "redirect_uri_mismatch";
+  if (code === 190 && subcode === 36001) return "code_already_used";
+  if (code === 190) return "invalid_or_expired_code";
+  if (code === 1 || code === 2) return "app_configuration_error";
+  if (code === 100) return "provider_request_invalid";
+  return "provider_token_failure_unclassified";
+};
+
+export const safeMetaProviderError = (payload: unknown): MetaOAuthDiagnosticDetails => {
+  if (!payload || typeof payload !== "object") {
+    return { provider_diagnosis:"provider_token_failure_unclassified" };
+  }
+  const error = (payload as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") {
+    return { provider_diagnosis:"provider_token_failure_unclassified" };
+  }
+  const source = error as Record<string, unknown>;
+  const code = safeInteger(source.code);
+  const subcode = safeInteger(source.error_subcode);
+  return {
+    provider_error_type:safeType(source.type),
+    provider_error_code:code,
+    provider_error_subcode:subcode,
+    provider_error_transient:typeof source.is_transient === "boolean" ? source.is_transient : undefined,
+    provider_diagnosis:classifyMetaProviderError(code,subcode)
+  };
+};
+
+const fingerprint = (value: string) =>
+  crypto.createHash("sha256").update(value).digest("hex").slice(0,10);
+
+export const getMetaConfigurationDiagnostics = () => {
+  const clientId=process.env.META_CLIENT_ID ?? "";
+  const secret=process.env.META_CLIENT_SECRET ?? "";
+  const redirect=process.env.META_FACEBOOK_REDIRECT_URI ?? "";
+  const expected="https://klps-lema-production.up.railway.app/api/growth/social/oauth/facebook/callback";
+  return {
+    event:"meta_oauth_configuration",
+    meta_client_id_configured:Boolean(clientId.trim()),
+    meta_secret_configured:Boolean(secret.trim()),
+    meta_redirect_configured:Boolean(redirect.trim()),
+    meta_redirect_equals_expected:redirect===expected,
+    meta_client_id_fingerprint:clientId ? fingerprint(clientId) : null,
+    meta_secret_fingerprint:secret ? fingerprint(secret) : null
+  };
+};
 
 export const safeDatabaseErrorCategory = (reason: unknown) => {
   const code = typeof reason === "object" && reason && "code" in reason &&

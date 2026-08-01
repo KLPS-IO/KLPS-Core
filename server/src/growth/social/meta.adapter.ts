@@ -6,6 +6,7 @@ import {
   SocialDiscoveredAsset,
   SocialProviderDefinition
 } from "./social.types";
+import { safeMetaProviderError } from "./meta.diagnostics";
 
 const META_GRAPH_ORIGIN = "https://graph.facebook.com";
 const META_GRAPH_VERSION = "v23.0";
@@ -173,6 +174,7 @@ export const exchangeMetaAuthorizationCode = async (
   input.diagnostics?.emit("meta_oauth_code_exchange_started",{ stage:"code_exchange" });
   try {
     tokenResponse = await fetch(tokenUrl, {
+      method: "GET",
       headers: { "Accept": "application/json" },
       signal: AbortSignal.timeout(15_000)
     });
@@ -190,7 +192,8 @@ export const exchangeMetaAuthorizationCode = async (
   ) {
     input.diagnostics?.emit("meta_oauth_code_exchange_failed",{
       internal_error_code:"meta_token_exchange_failed",stage:"code_exchange",
-      meta_http_status:tokenResponse.status
+      meta_http_status:tokenResponse.status,
+      ...safeMetaProviderError(tokenPayload)
     });
     throw metaError("Meta token exchange failed", "meta_token_exchange_failed");
   }

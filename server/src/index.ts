@@ -11,6 +11,7 @@ import financeRoutes from "./routes/finance.routes";
 import waitlistRoutes from "./routes/waitlist.routes";
 import growthRoutes from "./growth/growth.routes";
 import { getSocialStartupStatus } from "./growth/social/social.registry";
+import { getMetaConfigurationDiagnostics } from "./growth/social/meta.diagnostics";
 import rdLabRoutes from "./rd-lab/rd-lab.routes";
 import {
   getSessionUser,
@@ -29,6 +30,7 @@ console.info(JSON.stringify({
   available_providers: socialStartupStatus.filter(provider => provider.available).map(provider => provider.provider),
   unavailable_providers: socialStartupStatus.filter(provider => !provider.available).map(provider => provider.provider)
 }));
+console.info(JSON.stringify(getMetaConfigurationDiagnostics()));
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
