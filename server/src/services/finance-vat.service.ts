@@ -4,6 +4,9 @@ import { pool } from "../storage/postgres.client";
 
 type Db=Pick<PoolClient,"query">;
 type Input=Record<string,unknown>;
+type VatPeriod=Input&{id:string;start_date:unknown;end_date:unknown};
+export type VatPeriodSource="explicit"|"derived"|"none"|"conflict";
+export type VatPeriodResolution={stored_vat_period_id:string|null;effective_vat_period_id:string|null;vat_period_source:VatPeriodSource;effective_tax_point_date:string|null;matching_period_ids:string[]};
 const vatError=(message:string,code="invalid_vat_expense",statusCode=400)=>Object.assign(new Error(message),{code,statusCode});
 const text=(v:unknown)=>typeof v==="string"&&v.trim()?v.trim():null;
 const date=(v:unknown)=>{const x=text(v);if(!x)return null;if(!/^\d{4}-\d{2}-\d{2}$/.test(x)||Number.isNaN(Date.parse(`${x}T00:00:00Z`)))throw vatError("Invalid date");return x;};
@@ -13,12 +16,32 @@ const uuid=(v:unknown)=>{const x=text(v);if(!x||!/^[-0-9a-f]{36}$/i.test(x))thro
 export const VAT_TREATMENTS=["standard_rated","reduced_rated","zero_rated","exempt","outside_scope","no_vat_shown","reverse_charge_review_required","import_vat_review_required","blocked_vat","partially_recoverable","personal_non_business","pending_review"] as const;
 const REVIEW=["pending_review","in_review","ready_for_review","review_complete"];
 const optionalEnum=(v:unknown,values:readonly string[])=>{const x=text(v);if(x&&!values.includes(x))throw vatError("Invalid controlled value");return x;};
+const dateOnly=(value:unknown)=>{
+  if(value instanceof Date&&!Number.isNaN(value.getTime()))return value.toISOString().slice(0,10);
+  if(typeof value!=="string")return null;
+  const candidate=value.trim().slice(0,10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(candidate)&&!Number.isNaN(Date.parse(`${candidate}T00:00:00Z`))?candidate:null;
+};
+
+export const resolveVatPeriod=(expense:Input,periods:VatPeriod[]):VatPeriodResolution=>{
+  const stored=text(expense.vat_period_id);
+  const taxPoint=dateOnly(expense.invoice_date)??dateOnly(expense.transaction_date)??dateOnly(expense.payment_date);
+  if(stored&&periods.some(period=>period.id===stored))return{stored_vat_period_id:stored,effective_vat_period_id:stored,vat_period_source:"explicit",effective_tax_point_date:taxPoint,matching_period_ids:[stored]};
+  if(!taxPoint)return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:"none",effective_tax_point_date:null,matching_period_ids:[]};
+  const matches=periods.filter(period=>{const start=dateOnly(period.start_date),end=dateOnly(period.end_date);return Boolean(start&&end&&start<=taxPoint&&taxPoint<=end);});
+  if(matches.length===1)return{stored_vat_period_id:stored,effective_vat_period_id:matches[0].id,vat_period_source:"derived",effective_tax_point_date:taxPoint,matching_period_ids:[matches[0].id]};
+  return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:matches.length>1?"conflict":"none",effective_tax_point_date:taxPoint,matching_period_ids:matches.map(period=>period.id)};
+};
 
 export const expenseWarnings=(row:Input)=>{
   const warnings:string[]=[];
   const net=Number(row.gbp_net_amount??row.net_amount),vat=Number(row.gbp_vat_amount??row.vat_amount),gross=Number(row.gbp_gross_amount??row.gross_amount);
   if([net,vat,gross].every(Number.isFinite)&&Math.abs(net+vat-gross)>0.01)warnings.push("gross_net_vat_mismatch");
-  if(row.currency&&row.currency!=="GBP"&&!row.exchange_rate)warnings.push("foreign_currency_without_conversion");
+  const currency=text(row.currency)?.toUpperCase();
+  const hasRate=Number(row.exchange_rate)>0&&Number.isFinite(Number(row.exchange_rate))&&Number(row.gbp_gross_amount)>=0&&row.gbp_gross_amount!==null&&row.gbp_gross_amount!==undefined;
+  const hasManualGbp=[row.gbp_net_amount,row.gbp_vat_amount,row.gbp_gross_amount].every(value=>value!==null&&value!==undefined&&value!==""&&Number.isFinite(Number(value)))&&Boolean(text(row.notes));
+  if(currency&&currency!=="GBP"&&!hasRate&&!hasManualGbp)warnings.push("foreign_currency_without_conversion");
+  if(!text(row.vat_treatment)||row.vat_treatment==="pending_review")warnings.push("pending_vat_treatment");
   if(!row.supplier_country)warnings.push("supplier_country_missing");
   if(Number(row.recoverable_vat_amount)>0&&!row.supplier_vat_number)warnings.push("supplier_vat_number_missing");
   if(row.vat_treatment==="reverse_charge_review_required")warnings.push("reverse_charge_review_required");
@@ -49,10 +72,13 @@ const expenseValues=(input:Input,partial=false)=>{
   return values;
 };
 
-export const listVatPeriods=async(db:Db=pool)=>(await db.query("SELECT * FROM finance_os.vat_periods ORDER BY start_date")).rows;
+export const listVatPeriods=async(db:Db=pool)=>(await db.query("SELECT p.*,p.start_date::text AS start_date,p.end_date::text AS end_date,p.filing_deadline::text AS filing_deadline FROM finance_os.vat_periods p ORDER BY p.start_date")).rows;
 export const suggestVatPeriod=async(value:unknown,db:Db=pool)=>{
   const taxPoint=date(value);if(!taxPoint)return null;
-  return (await db.query("SELECT * FROM finance_os.vat_periods WHERE $1::date BETWEEN start_date AND end_date ORDER BY start_date LIMIT 1",[taxPoint])).rows[0]??null;
+  const periods=(await db.query("SELECT * FROM finance_os.vat_periods WHERE $1::date BETWEEN start_date AND end_date ORDER BY start_date",[taxPoint])).rows as VatPeriod[];
+  if(periods.length===1)return{...periods[0],vat_period_source:"derived" as const,effective_tax_point_date:taxPoint};
+  if(periods.length>1)return{id:null,vat_period_source:"conflict" as const,effective_tax_point_date:taxPoint,matching_period_ids:periods.map(period=>period.id)};
+  return null;
 };
 export const createHistoricalExpense=async(input:Input,userId:string,db:Db=pool)=>{
   const value=expenseValues(input); const key=`manual-${value.transaction_date}-${crypto.randomUUID()}`;
@@ -64,11 +90,16 @@ export const createHistoricalExpense=async(input:Input,userId:string,db:Db=pool)
 export const updateHistoricalExpense=async(id:string,input:Input,userId:string,db:Db=pool)=>{
   const value=expenseValues(input,true);const fields=Object.keys(value);if(!fields.length)throw vatError("No expense fields supplied");
   const reason=text(input.change_reason);if(!reason)throw vatError("change_reason is required");
+  const expenseId=uuid(id);
+  if(value.vat_review_status==="review_complete"){
+    const existing=(await db.query("SELECT * FROM finance_os.expenses WHERE id=$1",[expenseId])).rows[0];
+    if(!existing)throw vatError("Expense not found","expense_not_found",404);
+    if(expenseWarnings({...existing,...value}).length)throw vatError("Critical warnings must be resolved","vat_review_blocked",409);
+  }
   const params=fields.map(f=>value[f]);
-  const result=await db.query(`UPDATE finance_os.expenses SET ${fields.map((f,i)=>`${f}=$${i+1}`).join(",")},updated_by=$${fields.length+1},change_reason=$${fields.length+2} WHERE id=$${fields.length+3} RETURNING *`,[...params,userId,reason,uuid(id)]);
+  const result=await db.query(`UPDATE finance_os.expenses SET ${fields.map((f,i)=>`${f}=$${i+1}`).join(",")},updated_by=$${fields.length+1},change_reason=$${fields.length+2} WHERE id=$${fields.length+3} RETURNING *`,[...params,userId,reason,expenseId]);
   if(!result.rows[0])throw vatError("Expense not found","expense_not_found",404);
   const warnings=expenseWarnings(result.rows[0]);
-  if(value.vat_review_status==="review_complete"&&warnings.length)throw vatError("Critical warnings must be resolved","vat_review_blocked",409);
   return {...result.rows[0],warnings};
 };
 export const archiveHistoricalExpense=async(id:string,reason:unknown,userId:string,db:Db=pool)=>{
@@ -83,12 +114,15 @@ export const createExpenseAdjustment=async(expenseId:string,input:Input,userId:s
   const result=await db.query(`INSERT INTO finance_os.expense_adjustments(expense_id,adjustment_type,adjustment_date,net_amount,vat_amount,gross_amount,currency,gbp_net_amount,gbp_vat_amount,gbp_gross_amount,reason,supplier_reference,review_status,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14) RETURNING *`,[uuid(expenseId),type,adjustmentDate,decimal(input.net_amount),decimal(input.vat_amount),decimal(input.gross_amount),text(input.currency)??"GBP",decimal(input.gbp_net_amount),decimal(input.gbp_vat_amount),decimal(input.gbp_gross_amount),reason,text(input.supplier_reference),optionalEnum(input.review_status,REVIEW)??"pending_review",userId]);return result.rows[0];
 };
 export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
-  const result=await db.query(`SELECT e.*,p.start_date AS vat_period_start,p.end_date AS vat_period_end,
+  const requestedPeriodId=periodId?uuid(periodId):null;
+  const periods=await listVatPeriods(db) as VatPeriod[];
+  const result=await db.query(`SELECT e.*,e.invoice_date::text AS invoice_date,e.transaction_date::text AS transaction_date,e.payment_date::text AS payment_date,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('id',ev.id,'filename',ev.original_filename,'type',ev.vat_evidence_type)) FROM finance_os.evidence_links l JOIN finance_os.evidence ev ON ev.id=l.evidence_id WHERE l.entity_type='expense' AND l.entity_id=e.id),'[]'::jsonb) evidence_files
-    FROM finance_os.expenses e LEFT JOIN finance_os.vat_periods p ON p.id=e.vat_period_id WHERE e.archived_at IS NULL AND ($1::uuid IS NULL OR e.vat_period_id=$1) ORDER BY COALESCE(e.transaction_date,e.payment_date),e.created_at`,[periodId?uuid(periodId):null]);
+    FROM finance_os.expenses e WHERE e.archived_at IS NULL ORDER BY COALESCE(e.invoice_date,e.transaction_date,e.payment_date),e.created_at`);
+  const resolved=result.rows.map(row=>({row,resolution:resolveVatPeriod(row,periods)})).filter(({resolution})=>!requestedPeriodId||resolution.effective_vat_period_id===requestedPeriodId);
   const duplicateKeys=new Map<string,number>();
-  for(const row of result.rows){const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");duplicateKeys.set(key,(duplicateKeys.get(key)??0)+1);}
-  return result.rows.map(row=>{
+  for(const {row} of resolved){const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");duplicateKeys.set(key,(duplicateKeys.get(key)??0)+1);}
+  return resolved.map(({row,resolution})=>{
     const files=Array.isArray(row.evidence_files)?row.evidence_files:[];
     const types=files.map((f:{type?:unknown})=>String(f.type??""));
     const supplier=types.some((t:string)=>["full_vat_invoice","simplified_vat_invoice","retail_receipt","supplier_invoice_no_vat","credit_note"].includes(t));
@@ -97,9 +131,11 @@ export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
     const adjustment=types.some((t:string)=>["credit_note","refund_confirmation"].includes(t));
     const coverage=adjustment?"refund_or_credit_adjustment_present":vatInvoice?"vat_invoice_present":supplier&&payment?"supplier_document_plus_payment_evidence":supplier?"supplier_document_only":payment?"payment_evidence_only":files.length?"requires_review":"no_evidence";
     const warnings=expenseWarnings(row);
+    if(resolution.vat_period_source==="conflict")warnings.push("vat_period_conflict");
     if(!supplier)warnings.push("no_supplier_invoice");if(!payment)warnings.push("payment_evidence_missing");
     const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");if((duplicateKeys.get(key)??0)>1)warnings.push("possible_duplicate");
-    return {...row,evidence_coverage:coverage,warnings};
+    const effectivePeriod=periods.find(period=>period.id===resolution.effective_vat_period_id);
+    return {...row,...resolution,vat_period_start:effectivePeriod?.start_date??null,vat_period_end:effectivePeriod?.end_date??null,evidence_coverage:coverage,warnings};
   });
 };
 export const createComplianceDocument=async(input:Input,userId:string,db:Db=pool)=>{
