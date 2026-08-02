@@ -12,6 +12,7 @@ import {
 import { getSocialAdapter, listSocialAdapters, validateSocialEnvironment } from "./social.registry";
 import { MetaGrantMode, MetaOAuthDiagnostics, SocialCapability, SocialProvider } from "./social.types";
 import { getFacebookBusinessConfigurationStatus, safeDatabaseErrorCategory } from "./meta.diagnostics";
+import { diagnoseMetaAccounts } from "./meta.adapter";
 
 type Db = Pick<PoolClient, "query">;
 type Input = Record<string, unknown>;
@@ -118,6 +119,20 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       ]
     };
   });
+};
+
+export const getMetaAccountsDiagnostic = async (workspaceId:string,db:Db=pool) => {
+  const result=await db.query(`
+    SELECT encrypted_access_token
+    FROM growth_os.social_connections
+    WHERE workspace_id=$1 AND provider='facebook' AND status='connected'
+    LIMIT 1
+  `,[workspaceId]);
+  const encryptedToken=result.rows[0]?.encrypted_access_token;
+  if (typeof encryptedToken !== "string" || !encryptedToken) {
+    throw socialError("Connected Meta account not found","social_connection_not_found",404);
+  }
+  return diagnoseMetaAccounts(decryptSocialSecret(encryptedToken));
 };
 
 const audit = async (

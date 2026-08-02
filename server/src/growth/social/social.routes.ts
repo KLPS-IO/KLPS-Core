@@ -10,6 +10,7 @@ import {
   completeSocialOAuth,
   createPublishJob,
   disconnectSocialProvider,
+  getMetaAccountsDiagnostic,
   getSocialProviderOverview,
   schedulePublishJob,
   upsertSocialContentVariant
@@ -183,6 +184,17 @@ socialOAuthCallbackRoutes.get(
 router.get("/providers", asyncHandler(async (req,res) => {
   const workspace = await workspaceFor(req);
   res.json({ status: "success", providers: await getSocialProviderOverview(workspace.id) });
+}));
+
+router.get("/diagnostics/facebook/pages", asyncHandler(async (req,res) => {
+  if (req.dataRoomUser!.role !== "founder_admin") {
+    return res.status(403).json({
+      status:"error",code:"diagnostic_forbidden",
+      message:"This diagnostic is available only to founder administrators"
+    });
+  }
+  const workspace=await workspaceFor(req);
+  return res.json(await getMetaAccountsDiagnostic(workspace.id));
 }));
 
 router.post("/oauth/:provider/start", asyncHandler(async (req,res) => {
