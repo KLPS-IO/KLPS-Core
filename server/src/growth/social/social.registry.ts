@@ -9,6 +9,7 @@ import {
   checkMetaIdentityHealth,
   exchangeMetaAuthorizationCode
 } from "./meta.adapter";
+import { getFacebookBusinessConfigurationStatus } from "./meta.diagnostics";
 
 const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   linkedin: {
@@ -94,7 +95,8 @@ const providerEnv = (provider: SocialProvider) => {
     clientSecret: process.env.META_CLIENT_SECRET,
     redirectUri: provider === "facebook"
       ? process.env.META_FACEBOOK_REDIRECT_URI
-      : process.env.META_INSTAGRAM_REDIRECT_URI
+      : process.env.META_INSTAGRAM_REDIRECT_URI,
+    facebookConfigId:provider === "facebook" ? process.env.META_FACEBOOK_CONFIG_ID : undefined
   };
   if (provider === "linkedin") return {
     clientId: process.env.LINKEDIN_CLIENT_ID,
@@ -128,7 +130,21 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     url.searchParams.set(definition.id === "tiktok" ? "client_key" : "client_id", environment.clientId);
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", definition.scopes.join(definition.id === "tiktok" ? "," : " "));
+    if (definition.id === "facebook") {
+      const configuration=getFacebookBusinessConfigurationStatus();
+      if (!configuration.valid) {
+        throw Object.assign(new Error("Meta business configuration is invalid"),{
+          code:"social_provider_configuration_invalid",statusCode:409
+        });
+      }
+      if (configuration.active) {
+        url.searchParams.set("config_id",environment.facebookConfigId!);
+      } else {
+        url.searchParams.set("scope",definition.scopes.join(" "));
+      }
+    } else {
+      url.searchParams.set("scope", definition.scopes.join(definition.id === "tiktok" ? "," : " "));
+    }
     url.searchParams.set("state", state);
     if (codeChallenge) {
       url.searchParams.set("code_challenge", codeChallenge);
@@ -175,11 +191,17 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
   const definition = definitions[provider];
   const missing = definition.requiredEnvironment.filter(name => !process.env[name]?.trim());
   const encryptionMissing = !process.env.GROWTH_SOCIAL_ENCRYPTION_KEY?.trim();
+  const facebookConfiguration=provider === "facebook"
+    ? getFacebookBusinessConfigurationStatus()
+    : null;
   return {
-    available: !definition.futureReady && missing.length === 0 && !encryptionMissing,
+    available: !definition.futureReady && missing.length === 0 && !encryptionMissing &&
+      facebookConfiguration?.valid !== false,
     missing_environment: [...missing, ...(encryptionMissing ? ["GROWTH_SOCIAL_ENCRYPTION_KEY"] : [])],
     reason: definition.futureReady
       ? "Provider adapter reserved for future activation"
+      : facebookConfiguration?.valid === false
+        ? "Facebook Login for Business configuration is malformed"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
         : provider === "linkedin" || provider === "facebook"

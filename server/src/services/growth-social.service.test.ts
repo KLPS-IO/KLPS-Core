@@ -28,6 +28,7 @@ import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from ".
 import {
   classifyMetaProviderError,
   createMetaOAuthDiagnostics,
+  getFacebookBusinessConfigurationStatus,
   getMetaConfigurationDiagnostics,
   safeMetaProviderError
 } from "../growth/social/meta.diagnostics";
@@ -235,6 +236,116 @@ test("Meta authorization requests identity and discovery permissions only", asyn
       "instagram_content_publish","instagram_manage_insights"
     ]) assert.doesNotMatch(url.searchParams.get("scope") ?? "",new RegExp(forbidden));
   } finally { process.env = previous; }
+});
+
+test("Meta business configuration uses config_id without a conflicting scope", async () => {
+  const previous={...process.env};
+  const configId="123456789012345";
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",META_CLIENT_SECRET:"meta-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    META_FACEBOOK_CONFIG_ID:configId,
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,12).toString("base64")
+  });
+  const queries:Array<{sql:string;values:unknown[]}>=[];
+  const db={query:async(sql:string,values:unknown[]=[])=>{
+    queries.push({sql,values});
+    return {rows:[]};
+  }};
+  try {
+    const result=await beginSocialOAuth(workspaceId,userId,"facebook",db as never);
+    const url=new URL(result.authorization_url);
+    assert.equal(url.searchParams.get("config_id"),configId);
+    assert.equal(url.searchParams.has("scope"),false);
+    assert.ok(url.searchParams.has("state"));
+    assert.equal(url.searchParams.get("response_type"),"code");
+    const oauthInsert=queries.find(item=>item.sql.includes("social_oauth_authorisations"))!;
+    assert.deepEqual(oauthInsert.values[5],[
+      "public_profile","pages_show_list","instagram_basic",
+      "__grant_mode:business_configuration"
+    ]);
+    assert.doesNotMatch(JSON.stringify(queries),new RegExp(configId));
+  } finally { process.env=previous; }
+});
+
+test("Meta explicit-scope fallback records the same callback grant mode", async () => {
+  const previous={...process.env};
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",META_CLIENT_SECRET:"meta-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,12).toString("base64")
+  });
+  delete process.env.META_FACEBOOK_CONFIG_ID;
+  const queries:Array<{sql:string;values:unknown[]}>=[];
+  const db={query:async(sql:string,values:unknown[]=[])=>{
+    queries.push({sql,values});
+    return {rows:[]};
+  }};
+  try {
+    const result=await beginSocialOAuth(workspaceId,userId,"facebook",db as never);
+    const url=new URL(result.authorization_url);
+    assert.equal(url.searchParams.has("config_id"),false);
+    assert.equal(url.searchParams.get("scope"),"public_profile pages_show_list instagram_basic");
+    const oauthInsert=queries.find(item=>item.sql.includes("social_oauth_authorisations"))!;
+    const requestedScopes=oauthInsert.values[5] as string[];
+    assert.equal(requestedScopes[requestedScopes.length-1],"__grant_mode:explicit_scope");
+  } finally { process.env=previous; }
+});
+
+test("malformed Meta business configuration fails before connection mutation", async () => {
+  const previous={...process.env};
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",META_CLIENT_SECRET:"meta-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    META_FACEBOOK_CONFIG_ID:" 123456789 ",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,12).toString("base64")
+  });
+  const queries:string[]=[];
+  const db={query:async(sql:string)=>{queries.push(sql);return {rows:[]};}};
+  try {
+    assert.deepEqual(getFacebookBusinessConfigurationStatus(),{
+      configured:true,valid:false,active:false,fingerprint:null
+    });
+    await assert.rejects(
+      beginSocialOAuth(workspaceId,userId,"facebook",db as never),
+      (reason:unknown)=>(reason as {code?:string}).code === "social_provider_unavailable"
+    );
+    assert.ok(!queries.some(sql=>sql.includes("social_connections")));
+    assert.ok(!queries.some(sql=>sql.includes("social_connection_assets")));
+  } finally { process.env=previous; }
+});
+
+test("Meta readiness exposes only safe business configuration status", async () => {
+  const previous={...process.env};
+  const configId="123456789012345";
+  Object.assign(process.env,{
+    META_CLIENT_ID:"meta-client",META_CLIENT_SECRET:"meta-secret",
+    META_FACEBOOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/facebook/callback",
+    META_FACEBOOK_CONFIG_ID:configId,
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,12).toString("base64")
+  });
+  const db={query:async()=>({rows:[]})};
+  try {
+    const overview=await getSocialProviderOverview(workspaceId,db as never);
+    const facebook=overview.find(item=>item.provider === "facebook")!;
+    assert.deepEqual(facebook.facebook_business_configuration,{
+      config_id_configured:true,mode:"active",config_id_valid:true,
+      config_id_fingerprint:getFacebookBusinessConfigurationStatus().fingerprint
+    });
+    assert.doesNotMatch(JSON.stringify(overview),new RegExp(configId));
+  } finally { process.env=previous; }
+});
+
+test("Meta diagnostics allowlist grant mode without exposing configuration ID", () => {
+  const lines:string[]=[];
+  const diagnostics=createMetaOAuthDiagnostics("grant-mode-test",line=>lines.push(line));
+  diagnostics.emit("meta_oauth_state_validated",{
+    stage:"state_validation",grant_mode:"business_configuration",
+    config_id_configured:true
+  });
+  assert.match(lines[0],/"grant_mode":"business_configuration"/);
+  assert.match(lines[0],/"config_id_configured":true/);
+  assert.doesNotMatch(lines[0],/123456789012345/);
 });
 
 test("missing provider environment marks only that provider unavailable", () => {
@@ -877,7 +988,11 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     if (sql.includes("UPDATE growth_os.social_oauth_authorisations a")) return { rows:[{
       workspace_id:workspaceId,initiated_by:userId,
       redirect_uri:process.env.META_FACEBOOK_REDIRECT_URI,
-      encrypted_code_verifier:null
+      encrypted_code_verifier:null,
+      requested_scopes:[
+        "public_profile","pages_show_list","instagram_basic",
+        "__grant_mode:business_configuration"
+      ]
     }] };
     if (sql.includes("INSERT INTO growth_os.social_connections")) return { rows:[connection] };
     return { rows:[] };
@@ -916,6 +1031,8 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     assert.doesNotMatch(JSON.stringify(result),/meta-access-token|meta-client-secret/);
     assert.ok(diagnosticLines.some(line => line.includes("meta_oauth_connection_completed")));
     assert.ok(diagnosticLines.every(line => line.includes("meta-success-correlation")));
+    assert.ok(diagnosticLines.every(line => line.includes('"grant_mode":"business_configuration"')));
+    assert.ok(diagnosticLines.every(line => line.includes('"config_id_configured":true')));
     assert.doesNotMatch(diagnosticLines.join("\n"),/valid-meta-code|meta-access-token|meta-client-secret|meta-member-1|page-1|ig-1/);
   } finally {
     global.fetch=previousFetch;

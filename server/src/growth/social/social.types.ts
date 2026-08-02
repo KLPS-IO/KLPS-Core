@@ -16,7 +16,10 @@ export type ProviderEnvironment = {
   clientId?: string;
   clientSecret?: string;
   redirectUri?: string;
+  facebookConfigId?: string;
 };
+
+export type MetaGrantMode = "explicit_scope" | "business_configuration";
 
 export type ProviderSetupItem = {
   label: string;
@@ -60,6 +63,8 @@ export type SocialDiscoveredAsset = {
 };
 
 export type MetaOAuthDiagnosticDetails = {
+  grant_mode?: MetaGrantMode;
+  config_id_configured?: boolean;
   internal_error_code?: string;
   stage?: string;
   meta_http_status?: number;

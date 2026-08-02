@@ -10,8 +10,8 @@ import {
   hashOAuthState
 } from "./social.crypto";
 import { getSocialAdapter, listSocialAdapters, validateSocialEnvironment } from "./social.registry";
-import { MetaOAuthDiagnostics, SocialCapability, SocialProvider } from "./social.types";
-import { safeDatabaseErrorCategory } from "./meta.diagnostics";
+import { MetaGrantMode, MetaOAuthDiagnostics, SocialCapability, SocialProvider } from "./social.types";
+import { getFacebookBusinessConfigurationStatus, safeDatabaseErrorCategory } from "./meta.diagnostics";
 
 type Db = Pick<PoolClient, "query">;
 type Input = Record<string, unknown>;
@@ -81,6 +81,17 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       required_permissions: definition.scopes,
       capabilities: definition.capabilities,
       approval_required: !providerActivated,
+      ...(definition.id === "facebook" ? {
+        facebook_business_configuration: (() => {
+          const status=getFacebookBusinessConfigurationStatus();
+          return {
+            config_id_configured:status.configured,
+            mode:status.active ? "active" : "inactive",
+            config_id_valid:status.valid,
+            config_id_fingerprint:status.fingerprint
+          };
+        })()
+      } : {}),
       setup_checklist: [
         {
           label: "Developer account",
@@ -150,6 +161,13 @@ export const beginSocialOAuth = async (
   const state = generateOAuthState();
   const verifier = adapter.definition.supportsPkce ? generatePkceVerifier() : null;
   const challenge = verifier ? createPkceChallenge(verifier) : undefined;
+  const grantMode:MetaGrantMode = provider === "facebook" &&
+    getFacebookBusinessConfigurationStatus().active
+    ? "business_configuration" : "explicit_scope";
+  const authorizationUrl=adapter.buildAuthorizationUrl({ state, codeChallenge: challenge, redirectUri });
+  const requestedScopes=provider === "facebook"
+    ? [...adapter.definition.scopes,`__grant_mode:${grantMode}`]
+    : adapter.definition.scopes;
   await db.query(`
     INSERT INTO growth_os.social_oauth_authorisations(
       workspace_id,provider,state_hash,encrypted_code_verifier,redirect_uri,
@@ -158,7 +176,7 @@ export const beginSocialOAuth = async (
   `, [
     workspaceId,provider,hashOAuthState(state),
     verifier ? encryptSocialSecret(verifier) : null,
-    redirectUri,adapter.definition.scopes,userId
+    redirectUri,requestedScopes,userId
   ]);
   await db.query(`
     INSERT INTO growth_os.social_connections(workspace_id,provider,status)
@@ -170,9 +188,12 @@ export const beginSocialOAuth = async (
       END,
       last_error_code=NULL,last_error_at=NULL
   `, [workspaceId,provider]);
-  await audit(workspaceId,userId,provider,"oauth_start","started",{ redirect_host: new URL(redirectUri).host },db);
+  await audit(workspaceId,userId,provider,"oauth_start","started",{
+    redirect_host:new URL(redirectUri).host,
+    ...(provider === "facebook" ? { grant_mode:grantMode } : {})
+  },db);
   return {
-    authorization_url: adapter.buildAuthorizationUrl({ state, codeChallenge: challenge, redirectUri }),
+    authorization_url:authorizationUrl,
     expires_in_seconds: 600
   };
 };
@@ -210,7 +231,26 @@ type OAuthAuthorisationRow = {
   initiated_by: string;
   redirect_uri: string;
   encrypted_code_verifier: string | null;
+  requested_scopes?: string[];
 };
+
+const grantModeFromAuthorisation = (row: OAuthAuthorisationRow):MetaGrantMode => {
+  const marker=row.requested_scopes?.find(scope => scope.startsWith("__grant_mode:"));
+  if (!marker || marker === "__grant_mode:explicit_scope") return "explicit_scope";
+  if (marker === "__grant_mode:business_configuration") return "business_configuration";
+  throw socialError("OAuth grant mode is invalid","social_oauth_state_invalid",409);
+};
+
+const withMetaGrantContext = (
+  diagnostics:MetaOAuthDiagnostics | undefined,
+  grantMode:MetaGrantMode
+):MetaOAuthDiagnostics | undefined => diagnostics && ({
+  correlationId:diagnostics.correlationId,
+  emit:(event,details={}) => diagnostics.emit(event,{
+    ...details,grant_mode:grantMode,
+    config_id_configured:grantMode === "business_configuration"
+  })
+});
 
 const invalidState = (message = "OAuth state is invalid, expired or already used") =>
   socialError(message, "social_oauth_state_invalid", 409);
@@ -307,13 +347,17 @@ export const completeSocialOAuthFromState = async (
       a.workspace_id,
       a.initiated_by,
       a.redirect_uri,
-      a.encrypted_code_verifier
+      a.encrypted_code_verifier,
+      a.requested_scopes
   `, [stateHash,provider]);
   const row = authorisation.rows[0] as OAuthAuthorisationRow | undefined;
   if (!row) await diagnoseProviderStateFailure(stateHash,provider,db,diagnostics);
-  diagnostics?.emit("meta_oauth_state_validated",{ stage:"state_validation" });
+  const callbackDiagnostics=provider === "facebook"
+    ? withMetaGrantContext(diagnostics,grantModeFromAuthorisation(row!))
+    : diagnostics;
+  callbackDiagnostics?.emit("meta_oauth_state_validated",{ stage:"state_validation" });
   return completeSocialOAuthForAuthorisation(
-    row!,provider,code,providerError,db,diagnostics
+    row!,provider,code,providerError,db,callbackDiagnostics
   );
 };
 

@@ -21,6 +21,10 @@ export const createMetaOAuthDiagnostics = (
       correlation_id:correlationId,
       provider:"facebook"
     };
+    if (details.grant_mode) payload.grant_mode=details.grant_mode;
+    if (typeof details.config_id_configured === "boolean") {
+      payload.config_id_configured=details.config_id_configured;
+    }
     if (details.internal_error_code) payload.internal_error_code=details.internal_error_code;
     if (details.stage) payload.stage=details.stage;
     if (Number.isInteger(details.meta_http_status)) payload.meta_http_status=details.meta_http_status;
@@ -99,6 +103,7 @@ export const getMetaConfigurationDiagnostics = () => {
   const clientId=process.env.META_CLIENT_ID ?? "";
   const secret=process.env.META_CLIENT_SECRET ?? "";
   const redirect=process.env.META_FACEBOOK_REDIRECT_URI ?? "";
+  const configIdStatus=getFacebookBusinessConfigurationStatus();
   const expected="https://klps-lema-production.up.railway.app/api/growth/social/oauth/facebook/callback";
   return {
     event:"meta_oauth_configuration",
@@ -106,8 +111,28 @@ export const getMetaConfigurationDiagnostics = () => {
     meta_secret_configured:Boolean(secret.trim()),
     meta_redirect_configured:Boolean(redirect.trim()),
     meta_redirect_equals_expected:redirect===expected,
+    facebook_config_id_configured:configIdStatus.configured,
+    facebook_business_configuration_mode:configIdStatus.active ? "active" : "inactive",
+    facebook_config_id_valid:configIdStatus.valid,
+    facebook_config_id_fingerprint:configIdStatus.fingerprint,
     meta_client_id_fingerprint:clientId ? fingerprint(clientId) : null,
     meta_secret_fingerprint:secret ? fingerprint(secret) : null
+  };
+};
+
+const metaConfigurationIdPattern = /^[1-9][0-9]{4,31}$/;
+
+export const getFacebookBusinessConfigurationStatus = () => {
+  const raw=process.env.META_FACEBOOK_CONFIG_ID;
+  const configured=raw !== undefined && raw.length > 0;
+  const valid=!configured || (
+    raw === raw?.trim() && metaConfigurationIdPattern.test(raw)
+  );
+  return {
+    configured,
+    valid,
+    active:configured && valid,
+    fingerprint:configured && valid ? fingerprint(raw!) : null
   };
 };
 
