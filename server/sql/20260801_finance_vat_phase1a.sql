@@ -72,6 +72,7 @@ CREATE TABLE finance_os.expense_adjustments (
 
 ALTER TABLE finance_os.evidence
   ADD COLUMN IF NOT EXISTS vat_evidence_type text,
+  -- supplier_name predates Phase 1A; it is reused here and never owned by this migration.
   ADD COLUMN IF NOT EXISTS supplier_name text,
   ADD COLUMN IF NOT EXISTS supplier_reference text;
 ALTER TABLE finance_os.evidence ADD CONSTRAINT evidence_vat_evidence_type_check CHECK(vat_evidence_type IS NULL OR vat_evidence_type IN
