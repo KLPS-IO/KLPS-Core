@@ -86,8 +86,14 @@ test("pending VAT treatment warns until a controlled treatment is selected",()=>
 test("foreign currency accepts a recorded rate or complete manual GBP values with a note",()=>{
   const warning="foreign_currency_without_conversion";
   assert.ok(expenseWarnings({currency:"EUR",gross_amount:"10",vat_treatment:"pending_review"}).includes(warning));
-  assert.ok(!expenseWarnings({currency:"EUR",exchange_rate:"0.85",gbp_gross_amount:"8.50",vat_treatment:"pending_review"}).includes(warning));
+  assert.ok(!expenseWarnings({currency:"EUR",gross_amount:"10",exchange_rate:"0.85",gbp_net_amount:"7",gbp_vat_amount:"1.50",gbp_gross_amount:"8.50",vat_treatment:"pending_review"}).includes(warning));
   assert.ok(!expenseWarnings({currency:"EUR",gbp_net_amount:"7",gbp_vat_amount:"1.50",gbp_gross_amount:"8.50",notes:"Founder-entered GBP conversion",vat_treatment:"pending_review"}).includes(warning));
+  assert.ok(expenseWarnings({currency:"EUR",gbp_net_amount:"7",gbp_vat_amount:"1.50",gbp_gross_amount:"8.50",vat_treatment:"pending_review"}).includes(warning));
+  assert.ok(expenseWarnings({currency:"EUR",gbp_net_amount:"7",gbp_gross_amount:"8.50",notes:"Incomplete manual conversion",vat_treatment:"pending_review"}).includes(warning));
+  assert.ok(!expenseWarnings({currency:"GBP",vat_treatment:"pending_review"}).includes(warning));
+  const mismatched=expenseWarnings({currency:"EUR",gbp_net_amount:"7",gbp_vat_amount:"2",gbp_gross_amount:"8.50",notes:"Mismatched manual conversion",vat_treatment:"pending_review"});
+  assert.ok(mismatched.includes("gross_net_vat_mismatch"));
+  assert.ok(mismatched.includes(warning));
 });
 test("negative monetary values and invalid treatment are rejected",async()=>{
   const db={query:async()=>({rows:[]})};

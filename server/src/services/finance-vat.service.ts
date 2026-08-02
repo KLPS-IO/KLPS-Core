@@ -38,8 +38,11 @@ export const expenseWarnings=(row:Input)=>{
   const net=Number(row.gbp_net_amount??row.net_amount),vat=Number(row.gbp_vat_amount??row.vat_amount),gross=Number(row.gbp_gross_amount??row.gross_amount);
   if([net,vat,gross].every(Number.isFinite)&&Math.abs(net+vat-gross)>0.01)warnings.push("gross_net_vat_mismatch");
   const currency=text(row.currency)?.toUpperCase();
-  const hasRate=Number(row.exchange_rate)>0&&Number.isFinite(Number(row.exchange_rate))&&Number(row.gbp_gross_amount)>=0&&row.gbp_gross_amount!==null&&row.gbp_gross_amount!==undefined;
-  const hasManualGbp=[row.gbp_net_amount,row.gbp_vat_amount,row.gbp_gross_amount].every(value=>value!==null&&value!==undefined&&value!==""&&Number.isFinite(Number(value)))&&Boolean(text(row.notes));
+  const finitePresent=(value:unknown)=>value!==null&&value!==undefined&&value!==""&&Number.isFinite(Number(value));
+  const completeGbp=[row.gbp_net_amount,row.gbp_vat_amount,row.gbp_gross_amount].every(finitePresent);
+  const balancedGbp=completeGbp&&Math.abs(Number(row.gbp_net_amount)+Number(row.gbp_vat_amount)-Number(row.gbp_gross_amount))<=0.01;
+  const hasRate=Number(row.exchange_rate)>0&&Number.isFinite(Number(row.exchange_rate))&&finitePresent(row.gross_amount)&&completeGbp;
+  const hasManualGbp=balancedGbp&&Boolean(text(row.notes));
   if(currency&&currency!=="GBP"&&!hasRate&&!hasManualGbp)warnings.push("foreign_currency_without_conversion");
   if(!text(row.vat_treatment)||row.vat_treatment==="pending_review")warnings.push("pending_vat_treatment");
   if(!row.supplier_country)warnings.push("supplier_country_missing");
