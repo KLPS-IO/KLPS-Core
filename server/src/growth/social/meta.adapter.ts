@@ -29,6 +29,7 @@ type MetaPermission = {
 type MetaPage = {
   id?: unknown;
   name?: unknown;
+  access_token?: unknown;
   instagram_business_account?: {
     id?: unknown;
     name?: unknown;
@@ -71,33 +72,52 @@ export const discoverMetaBusinessIdentities = async (
   accessToken: string,
   diagnostics?: MetaOAuthDiagnostics
 ): Promise<MetaDiscoveredIdentity[]> => {
+  const endpoint="/me/accounts";
+  const fields="id,name,access_token,instagram_business_account{id,name,username}";
   let response:Response;
   try {
-    response = await graphGet(
-      "/me/accounts?fields=id,name,instagram_business_account{id,name,username}",
-      accessToken
-    );
+    response = await graphGet(`${endpoint}?fields=${fields}`,accessToken);
   } catch {
     diagnostics?.emit("meta_oauth_page_discovery_failed",{
-      internal_error_code:"meta_page_discovery_failed",stage:"page_discovery"
+      internal_error_code:"meta_page_discovery_failed",stage:"page_discovery",
+      graph_version:META_GRAPH_VERSION,graph_endpoint:endpoint
     });
     throw metaError("Meta Page discovery failed", "meta_page_discovery_failed");
   }
   const payload = await readJson(response);
-  if (!response.ok || !Array.isArray(payload.data)) {
+  const nestedAccounts = payload.accounts && typeof payload.accounts === "object"
+    ? (payload.accounts as Record<string, unknown>).data
+    : undefined;
+  const pages = Array.isArray(payload.data)
+    ? payload.data
+    : Array.isArray(nestedAccounts) ? nestedAccounts : null;
+  if (!response.ok || !pages) {
     diagnostics?.emit("meta_oauth_page_discovery_failed",{
       internal_error_code:"meta_page_discovery_failed",stage:"page_discovery",
-      meta_http_status:response.status
+      meta_http_status:response.status,graph_version:META_GRAPH_VERSION,
+      graph_endpoint:endpoint
     });
     throw metaError("Meta Page discovery failed", "meta_page_discovery_failed");
   }
   const identities: MetaDiscoveredIdentity[] = [];
-  for (const value of payload.data) {
+  let discardedPages=0;
+  for (const value of pages) {
     if (!value || typeof value !== "object") continue;
     const page = value as MetaPage;
     const pageId = nonEmpty(page.id);
     const pageName = nonEmpty(page.name);
-    if (!pageId || !pageName) continue;
+    diagnostics?.emit("meta_oauth_page_candidate_received",{
+      stage:"page_discovery",graph_version:META_GRAPH_VERSION,graph_endpoint:endpoint,
+      meta_http_status:response.status,page_id:pageId ?? undefined,page_name:pageName ?? undefined,
+      page_access_token_exists:Boolean(nonEmpty(page.access_token)),
+      instagram_business_account_exists:Boolean(
+        page.instagram_business_account && typeof page.instagram_business_account === "object"
+      )
+    });
+    if (!pageId || !pageName) {
+      discardedPages+=1;
+      continue;
+    }
     identities.push({
       provider: "facebook",
       providerAssetType: "page",
@@ -119,7 +139,11 @@ export const discoverMetaBusinessIdentities = async (
   const pageFound = identities.some(identity => identity.provider === "facebook");
   const instagramFound = identities.some(identity => identity.provider === "instagram");
   diagnostics?.emit("meta_oauth_page_discovery_completed",{
-    stage:"page_discovery",page_found:pageFound,instagram_found:instagramFound
+    stage:"page_discovery",page_found:pageFound,instagram_found:instagramFound,
+    graph_version:META_GRAPH_VERSION,graph_endpoint:endpoint,meta_http_status:response.status,
+    returned_pages_count:pages.length,
+    managed_pages_count:identities.filter(identity => identity.provider === "facebook").length,
+    discarded_pages_count:discardedPages
   });
   diagnostics?.emit("meta_oauth_instagram_discovery_completed",{
     stage:"instagram_discovery",page_found:pageFound,instagram_found:instagramFound

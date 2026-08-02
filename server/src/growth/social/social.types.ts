@@ -72,6 +72,15 @@ export type MetaOAuthDiagnosticDetails = {
   provider_error_subcode?: number;
   provider_error_transient?: boolean;
   provider_diagnosis?: MetaProviderDiagnosis;
+  graph_version?: string;
+  graph_endpoint?: string;
+  managed_pages_count?: number;
+  returned_pages_count?: number;
+  discarded_pages_count?: number;
+  page_name?: string;
+  page_id?: string;
+  page_access_token_exists?: boolean;
+  instagram_business_account_exists?: boolean;
 };
 
 export type MetaProviderDiagnosis =

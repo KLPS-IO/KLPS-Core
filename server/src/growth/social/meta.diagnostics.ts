@@ -33,6 +33,19 @@ export const createMetaOAuthDiagnostics = (
     if (Number.isInteger(details.provider_error_subcode)) payload.provider_error_subcode=details.provider_error_subcode;
     if (typeof details.provider_error_transient === "boolean") payload.provider_error_transient=details.provider_error_transient;
     if (details.provider_diagnosis) payload.provider_diagnosis=details.provider_diagnosis;
+    if (details.graph_version) payload.graph_version=details.graph_version;
+    if (details.graph_endpoint) payload.graph_endpoint=details.graph_endpoint;
+    if (Number.isInteger(details.managed_pages_count)) payload.managed_pages_count=details.managed_pages_count;
+    if (Number.isInteger(details.returned_pages_count)) payload.returned_pages_count=details.returned_pages_count;
+    if (Number.isInteger(details.discarded_pages_count)) payload.discarded_pages_count=details.discarded_pages_count;
+    // Asset identifiers are available only during an explicitly enabled,
+    // temporary diagnostic window. They remain excluded from normal logs.
+    if (process.env.META_ASSET_DISCOVERY_DIAGNOSTICS === "true") {
+      if (details.page_name) payload.page_name=details.page_name;
+      if (details.page_id) payload.page_id=details.page_id;
+    }
+    if (typeof details.page_access_token_exists === "boolean") payload.page_access_token_exists=details.page_access_token_exists;
+    if (typeof details.instagram_business_account_exists === "boolean") payload.instagram_business_account_exists=details.instagram_business_account_exists;
     const line = JSON.stringify(payload);
     if (sink) sink(line);
     else if (failureEvent(event)) console.warn(line);

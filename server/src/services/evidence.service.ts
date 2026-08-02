@@ -16,6 +16,11 @@ export const EVIDENCE_TYPES = [
   "supplier_quote", "research", "survey", "competitor_analysis",
   "contract", "invoice", "prototype_cost", "document"
 ] as const;
+export const VAT_EVIDENCE_TYPES = [
+  "full_vat_invoice","simplified_vat_invoice","retail_receipt","supplier_invoice_no_vat",
+  "order_confirmation","paypal_payment_receipt","card_bank_statement","credit_note",
+  "refund_confirmation","import_vat_evidence","proof_of_payment","other_supporting_document"
+] as const;
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
   "report", "scenario", "hire", "document", "expense",
@@ -84,10 +89,13 @@ export const validateEvidenceInput = (input: Input, partial = false) => {
   if (!partial || "document_status" in input) output.document_status = enumValue(input.document_status, "document_status", DOCUMENT_STATUSES, "Draft");
   for (const field of ["last_reviewed_date", "next_review_date", "expiry_date", "document_date"] as const) if (field in input) output[field] = date(input[field], field);
   if ("change_reason" in input || !partial) output.change_reason = text(input.change_reason) ?? (partial ? "Updated evidence metadata" : "Created evidence metadata");
+  if ("vat_evidence_type" in input) output.vat_evidence_type=enumValue(input.vat_evidence_type,"vat_evidence_type",VAT_EVIDENCE_TYPES);
+  if ("supplier_name" in input) output.supplier_name=text(input.supplier_name);
+  if ("supplier_reference" in input) output.supplier_reference=text(input.supplier_reference);
   return output;
 };
 
-const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "change_reason"];
+const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "vat_evidence_type", "supplier_name", "supplier_reference", "change_reason"];
 const canonicalLinksLateral = `LEFT JOIN LATERAL (
   SELECT jsonb_agg(canonical_link ORDER BY canonical_link.created_at) AS links
   FROM finance_os.evidence_links canonical_link

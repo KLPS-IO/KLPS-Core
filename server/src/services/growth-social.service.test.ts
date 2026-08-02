@@ -966,6 +966,44 @@ test("Meta business discovery truthfully supports no managed Page", async () => 
   } finally { global.fetch=previousFetch; }
 });
 
+test("Meta Page discovery requests Page tokens, diagnoses filtering, and never logs tokens", async () => {
+  const previousFetch=global.fetch;
+  const previousDiagnosticFlag=process.env.META_ASSET_DISCOVERY_DIAGNOSTICS;
+  process.env.META_ASSET_DISCOVERY_DIAGNOSTICS="true";
+  let requestedUrl="";
+  global.fetch=async input => {
+    requestedUrl=String(input);
+    return new Response(JSON.stringify({accounts:{data:[
+      {id:"page-1",name:"KLPS",access_token:"private-page-token",
+        instagram_business_account:{id:"ig-1",name:"KLPS",username:"klps"}},
+      {id:"page-without-name",access_token:"another-private-token"}
+    ]}}),{status:200,headers:{"Content-Type":"application/json"}});
+  };
+  const lines:string[]=[];
+  try {
+    const identities=await discoverMetaBusinessIdentities(
+      "private-user-token",createMetaOAuthDiagnostics("asset-audit",line=>lines.push(line))
+    );
+    const url=new URL(requestedUrl);
+    assert.equal(url.pathname,"/v23.0/me/accounts");
+    assert.equal(
+      url.searchParams.get("fields"),
+      "id,name,access_token,instagram_business_account{id,name,username}"
+    );
+    assert.equal(identities.filter(item=>item.provider==="facebook").length,1);
+    const completed=lines.find(line=>line.includes("meta_oauth_page_discovery_completed"))!;
+    assert.match(completed,/"returned_pages_count":2/);
+    assert.match(completed,/"managed_pages_count":1/);
+    assert.match(completed,/"discarded_pages_count":1/);
+    assert.ok(lines.some(line=>line.includes('"page_access_token_exists":true')));
+    assert.doesNotMatch(lines.join("\n"),/private-user-token|private-page-token|another-private-token/);
+  } finally {
+    global.fetch=previousFetch;
+    if (previousDiagnosticFlag === undefined) delete process.env.META_ASSET_DISCOVERY_DIAGNOSTICS;
+    else process.env.META_ASSET_DISCOVERY_DIAGNOSTICS=previousDiagnosticFlag;
+  }
+});
+
 test("Meta exchange failures emit stage-specific diagnostics without raw Meta errors", async () => {
   const definition=getSocialAdapter("facebook").definition;
   const environment={ clientId:"client",clientSecret:"secret",redirectUri:"https://api.example/callback" };

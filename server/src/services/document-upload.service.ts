@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import path from "path";
 import { PoolClient } from "pg";
-import { DOCUMENT_CATEGORIES, LINKED_ENTITY_TYPES, linkEvidence } from "./evidence.service";
+import { DOCUMENT_CATEGORIES, LINKED_ENTITY_TYPES, VAT_EVIDENCE_TYPES, linkEvidence } from "./evidence.service";
 
 type Input = Record<string, unknown>;
 type Db = Pick<PoolClient, "query">;
@@ -72,7 +72,23 @@ export const parseDocumentUploadInput = (input: Input) => {
     linkedEntityType,
     linkedEntityId: supplied === 3 ? required(input.linked_entity_id, "linked_entity_id") : null,
     relationship: supplied === 3 ? required(input.relationship, "relationship") : null
+    ,vatEvidenceType:input.vat_evidence_type ? required(input.vat_evidence_type,"vat_evidence_type") : null
+    ,supplierReference:optional(input.supplier_reference)
   };
+};
+
+export const validateDocumentFile=(file:Express.Multer.File)=>{
+  const allowed:Record<string,string[]>={
+    pdf:["application/pdf"],png:["image/png"],jpg:["image/jpeg"],jpeg:["image/jpeg"],
+    txt:["text/plain"],csv:["text/csv","text/plain","application/vnd.ms-excel"],
+    docx:["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    xlsx:["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    pptx:["application/vnd.openxmlformats-officedocument.presentationml.presentation"]
+  };
+  const ext=extensionFor(file.originalname);if(!allowed[ext]?.includes(file.mimetype))throw badRequest("File type is not allowed","file_type_not_allowed");
+  const b=file.buffer;
+  const signatureOk=ext==="pdf"?b.subarray(0,5).toString()==="%PDF-":ext==="png"?b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):["jpg","jpeg"].includes(ext)?b[0]===255&&b[1]===216:["docx","xlsx","pptx"].includes(ext)?b[0]===80&&b[1]===75:true;
+  if(!signatureOk)throw badRequest("File content does not match its extension","file_signature_invalid");
 };
 
 const sanitiseTitle = (title: string) => title
@@ -95,9 +111,10 @@ export const buildDocumentStorage = (category: typeof DOCUMENT_CATEGORIES[number
 };
 
 export const createUploadedEvidenceRecord = async (input: ReturnType<typeof parseDocumentUploadInput>, file: Express.Multer.File, userId: string, db: Db) => {
+  if(input.vatEvidenceType&&!VAT_EVIDENCE_TYPES.includes(input.vatEvidenceType as typeof VAT_EVIDENCE_TYPES[number]))throw badRequest("Invalid vat_evidence_type");
   const inserted = await db.query(
-    `INSERT INTO finance_os.evidence (title, description, evidence_type, document_category, source_organisation, document_date, original_filename, mime_type, file_size, checksum, created_by, updated_by, storage_provider, signed_url_available, verification_status, document_status, file_version) VALUES ($1, $2, 'document', $3, $4, $5, $6, $7, $8, $9, $10, $10, 'r2', true, 'Unknown', 'Active', 1) RETURNING *`,
-    [input.title, input.description, input.documentCategory, input.sourceOrganisation, input.documentDate, file.originalname, file.mimetype || "application/octet-stream", file.size, crypto.createHash("sha256").update(file.buffer).digest("hex"), userId]
+    `INSERT INTO finance_os.evidence (title, description, evidence_type, document_category, source_organisation, document_date, original_filename, mime_type, file_size, checksum, vat_evidence_type, supplier_reference, created_by, updated_by, storage_provider, signed_url_available, verification_status, document_status, file_version) VALUES ($1, $2, 'document', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 'r2', true, 'Unknown', 'Active', 1) RETURNING *`,
+    [input.title, input.description, input.documentCategory, input.sourceOrganisation, input.documentDate, file.originalname, file.mimetype || "application/octet-stream", file.size, crypto.createHash("sha256").update(file.buffer).digest("hex"),input.vatEvidenceType,input.supplierReference,userId]
   );
   return inserted.rows[0];
 };

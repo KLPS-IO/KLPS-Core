@@ -32,7 +32,8 @@ import {
   createOptionalUploadLink,
   createUploadedEvidenceRecord,
   finishUploadedEvidenceRecord,
-  parseDocumentUploadInput
+  parseDocumentUploadInput,
+  validateDocumentFile
 } from "../services/document-upload.service";
 import {
   createR2PresignedUrl,
@@ -48,6 +49,17 @@ import {
   getCompanyVersions,
   updateCompany
 } from "../services/company.service";
+import {
+  archiveHistoricalExpense,
+  createExpenseAdjustment,
+  createComplianceDocument,
+  createHistoricalExpense,
+  getVatLedger,
+  listVatPeriods,
+  listComplianceDocuments,
+  suggestVatPeriod,
+  updateHistoricalExpense
+} from "../services/finance-vat.service";
 
 const router = express.Router();
 
@@ -178,6 +190,9 @@ const optionalNumber = (value: unknown) => {
 
   return parsed;
 };
+const auditFinanceAction=async(eventType:string,entityType:string,entityId:string,userId:string,db:{query:typeof pool.query}=pool)=>{
+  await db.query(`INSERT INTO finance_os.finance_events(event_type,entity_type,entity_id,summary,metadata,created_by) VALUES($1,$2,$3,$4,'{}'::jsonb,$5)`,[eventType,entityType,entityId,`Finance evidence ${eventType}`,userId]);
+};
 
 const assumptionUpdateFields = [
   "name",
@@ -198,6 +213,19 @@ router.use(
   requireAuthorised,
   ndaMiddleware
 );
+
+router.get("/vat-periods",asyncHandler(async(_req,res)=>res.json(jsonOk({vat_periods:await listVatPeriods()}))));
+router.get("/vat-periods/suggest",asyncHandler(async(req,res)=>res.json(jsonOk({vat_period:await suggestVatPeriod(req.query.tax_point_date)}))));
+router.get("/vat-ledger",asyncHandler(async(req,res)=>res.json(jsonOk({
+  label:"VAT working paper – not an HMRC submission",
+  transactions:await getVatLedger(req.query.vat_period_id)
+}))));
+router.post("/expenses",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({expense:await createHistoricalExpense(req.body??{},req.dataRoomUser!.id)}))));
+router.patch("/expenses/:id",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({expense:await updateHistoricalExpense(getParam(req.params.id),req.body??{},req.dataRoomUser!.id)}))));
+router.post("/expenses/:id/archive",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({expense:await archiveHistoricalExpense(getParam(req.params.id),req.body?.change_reason,req.dataRoomUser!.id)}))));
+router.post("/expenses/:id/adjustments",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({adjustment:await createExpenseAdjustment(getParam(req.params.id),req.body??{},req.dataRoomUser!.id)}))));
+router.get("/compliance-documents",asyncHandler(async(_req,res)=>res.json(jsonOk({compliance_documents:await listComplianceDocuments()}))));
+router.post("/compliance-documents",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({compliance_document:await createComplianceDocument(req.body??{},req.dataRoomUser!.id)}))));
 
 router.get("/company", asyncHandler(async (_req, res) => {
   const company = await getCompany();
@@ -591,6 +619,7 @@ router.post(
     if (!isR2Configured()) {
       return res.status(503).json({ status: "error", code: "r2_not_configured", message: "Document storage is unavailable" });
     }
+    validateDocumentFile(req.file);
 
     const input = parseDocumentUploadInput(req.body ?? {});
     const client = await pool.connect();
@@ -603,6 +632,7 @@ router.post(
       uploadedObjectKey = storage.objectKey;
       const evidence = await finishUploadedEvidenceRecord(created.id, storage.objectKey, client);
       const link = await createOptionalUploadLink(created.id, input, req.dataRoomUser!.id, client);
+      await auditFinanceAction("evidence.uploaded","evidence",created.id,req.dataRoomUser!.id,client);
       await client.query("COMMIT");
       return res.status(201).json(jsonOk({ evidence, link }));
     } catch (error) {
@@ -636,6 +666,7 @@ router.post(
       return res.status(503).json({ status: "error", code: "r2_not_configured", message: "Document storage is unavailable" });
     }
     const expiresSeconds = 300;
+    await auditFinanceAction(action === "download" ? "evidence.downloaded" : "evidence.viewed","evidence",evidence.id,req.dataRoomUser!.id);
     const filename = String(evidence.r2_object_key).split("/").pop();
     const signedUrl = createR2PresignedUrl({
       method: "GET",
@@ -680,6 +711,7 @@ router.post(
       req.body ?? {},
       req.dataRoomUser!.id
     );
+    await auditFinanceAction("evidence.linked","evidence",getParam(req.params.id),req.dataRoomUser!.id);
     return res.status(201).json(jsonOk({ link }));
   })
 );
@@ -755,6 +787,7 @@ router.delete(
         getParam(req.params.linkId),
         client
       );
+      await auditFinanceAction("evidence.unlinked","evidence",getParam(req.params.id),req.dataRoomUser!.id,client);
       if (result.r2_object_key) await deleteFromR2(result.r2_object_key);
       await client.query("COMMIT");
       return res.json(jsonOk(result));
