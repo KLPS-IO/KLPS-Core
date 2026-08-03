@@ -211,6 +211,42 @@ test("provider registry is complete and platform capability driven", () => {
   assert.throws(() => getSocialAdapter("unofficial"));
 });
 
+test("TikTok Login Kit requests identity scope only and keeps posting approval-gated", () => {
+  const previous = { ...process.env };
+  Object.assign(process.env,{
+    TIKTOK_CLIENT_KEY:"tiktok-client-key",
+    TIKTOK_CLIENT_SECRET:"tiktok-client-secret",
+    TIKTOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/tiktok/callback"
+  });
+  try {
+    const definition=getSocialAdapter("tiktok").definition;
+    const url=new URL(getSocialAdapter("tiktok").buildAuthorizationUrl({
+      state:"opaque-state",
+      redirectUri:process.env.TIKTOK_REDIRECT_URI!
+    }));
+    assert.equal(`${url.origin}${url.pathname}`,"https://www.tiktok.com/v2/auth/authorize/");
+    assert.equal(url.searchParams.get("client_key"),"tiktok-client-key");
+    assert.equal(url.searchParams.get("response_type"),"code");
+    assert.equal(url.searchParams.get("scope"),"user.info.basic");
+    assert.equal(url.searchParams.get("redirect_uri"),process.env.TIKTOK_REDIRECT_URI);
+    assert.equal(url.searchParams.get("state"),"opaque-state");
+    assert.equal(url.searchParams.getAll("scope").length,1);
+    assert.doesNotMatch(url.search,/video(?:\.upload|\.publish)|scope=%22|scope=[^&]*%20/);
+    assert.deepEqual(definition.futurePermissions,["video.upload","video.publish"]);
+    assert.deepEqual(definition.capabilities,[]);
+  } finally { process.env = previous; }
+});
+
+test("TikTok identity activation does not change other provider permissions", () => {
+  assert.deepEqual(getSocialAdapter("linkedin").definition.scopes,["openid","profile"]);
+  assert.deepEqual(getSocialAdapter("facebook").definition.scopes,[
+    "public_profile","pages_show_list","instagram_basic"
+  ]);
+  assert.deepEqual(getSocialAdapter("x").definition.scopes,[
+    "tweet.read","tweet.write","users.read","offline.access"
+  ]);
+});
+
 test("Meta authorization requests identity and discovery permissions only", async () => {
   const previous = { ...process.env };
   Object.assign(process.env,{

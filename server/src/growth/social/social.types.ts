@@ -35,6 +35,7 @@ export type SocialProviderDefinition = {
   authorizationUrl: string | null;
   tokenUrl: string | null;
   scopes: string[];
+  futurePermissions?: string[];
   capabilities: SocialCapability[];
   requiredEnvironment: string[];
   supportsPkce: boolean;

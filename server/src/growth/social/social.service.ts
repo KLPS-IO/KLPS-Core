@@ -79,6 +79,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       connection: connections.get(definition.id) ?? null,
       availability: environment,
       required_permissions: definition.scopes,
+      future_permissions: definition.futurePermissions ?? [],
       capabilities: definition.capabilities,
       approval_required: !providerActivated,
       ...(definition.id === "facebook" ? {

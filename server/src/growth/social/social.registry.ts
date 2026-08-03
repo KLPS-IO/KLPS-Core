@@ -70,11 +70,15 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     applicationName: "TikTok Login Kit and Content Posting application",
     authorizationUrl: "https://www.tiktok.com/v2/auth/authorize/",
     tokenUrl: "https://open.tiktokapis.com/v2/oauth/token/",
-    scopes: ["user.info.basic","video.publish","video.upload"],
-    capabilities: ["video","metrics","draft_upload","direct_publishing"],
+    scopes: ["user.info.basic"],
+    futurePermissions: ["video.upload","video.publish"],
+    capabilities: [],
     requiredEnvironment: ["TIKTOK_CLIENT_KEY","TIKTOK_CLIENT_SECRET","TIKTOK_REDIRECT_URI"],
     supportsPkce: true,
-    externalReview: ["Submit Login Kit and Content Posting API scopes for TikTok review.", "Complete TikTok audit requirements before public direct posting."]
+    externalReview: [
+      "Activate Login Kit with user.info.basic for the identity connection.",
+      "Content Posting permissions video.upload and video.publish await separate provider approval and capability activation."
+    ]
   },
   snapchat: {
     id: "snapchat", name: "Snapchat",
