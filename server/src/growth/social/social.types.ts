@@ -87,6 +87,8 @@ export type MetaOAuthDiagnosticDetails = {
   page_id?: string;
   page_access_token_exists?: boolean;
   instagram_business_account_exists?: boolean;
+  x_http_status?: number;
+  x_error_category?: string;
 };
 
 export type MetaProviderDiagnosis =

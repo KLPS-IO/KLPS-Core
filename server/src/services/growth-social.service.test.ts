@@ -36,6 +36,7 @@ import {
   getMetaConfigurationDiagnostics,
   safeMetaProviderError
 } from "../growth/social/meta.diagnostics";
+import { createXOAuthDiagnostics } from "../growth/social/x.diagnostics";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -1647,7 +1648,11 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     const originalQuery=db.query;
     db.query=async (sql:string,values:unknown[]=[]) => sql.includes("INSERT INTO growth_os.social_connections")
       ? (queries.push({sql,values}),{rows:[connection]}) : originalQuery(sql,values);
-    const result=await completeXOAuthFromState("valid-x-state","private-code",undefined,db as never);
+    const diagnosticLines:string[]=[];
+    const diagnostics=createXOAuthDiagnostics("x-correlation",line=>diagnosticLines.push(line));
+    const result=await completeXOAuthFromState(
+      "valid-x-state","private-code",undefined,db as never,diagnostics
+    );
     assert.equal(result.provider_account_name,"@founder_handle");
     assert.equal(requests[0].url,"https://api.x.com/2/oauth2/token");
     assert.equal(requests[0].init?.method,"POST");
@@ -1672,6 +1677,10 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     assert.deepEqual(insert.values[8],["users.read","offline.access"]);
     assert.deepEqual(insert.values[9],[]);
     assert.doesNotMatch(JSON.stringify(queries),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret/);
+    assert.ok(diagnosticLines.some(line => /x_oauth_token_exchange_completed/.test(line)));
+    assert.ok(diagnosticLines.some(line => /x_oauth_identity_lookup_completed/.test(line)));
+    assert.ok(diagnosticLines.some(line => /x_oauth_connection_completed/.test(line)));
+    assert.doesNotMatch(diagnosticLines.join(""),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret|Founder Display Name|founder_handle|x-user-id/);
   });
 });
 
@@ -1728,11 +1737,27 @@ test("X callback is public, cookie-independent and redirects with allowlisted re
   await handleXOAuthCallback({query:{state:"state",code:"code"},headers:{}} as never,{
     redirect:(_status:number,url:string) => {redirectUrl=url;}
   } as never,(async (...values:unknown[]) => {received=values; return {status:"connected"};}) as never);
-  assert.deepEqual(received,["state","code",undefined]);
+  assert.deepEqual(received.slice(0,4),["state","code",undefined,undefined]);
+  assert.equal(typeof (received[4] as {correlationId?:unknown})?.correlationId,"string");
   assert.equal(redirectUrl,
     "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=x&social_status=connected");
   assert.doesNotMatch(redirectUrl,/state|code|cookie/);
   const routes=readFileSync("server/src/growth/social/social.routes.ts","utf8");
   assert.match(routes,/socialOAuthCallbackRoutes\.get\(\s*"\/oauth\/x\/callback"/);
   assert.deepEqual(getSocialAdapter("x").definition.capabilities,[]);
+});
+
+test("X diagnostics allowlist correlation, stages and status without raw provider data", () => {
+  const lines:string[]=[];
+  const diagnostics=createXOAuthDiagnostics("safe-correlation",line=>lines.push(line));
+  diagnostics.emit("x_oauth_identity_lookup_failed",{
+    stage:"identity_lookup",x_http_status:403,x_error_category:"forbidden",
+    page_name:"private username",page_id:"private X id"
+  });
+  diagnostics.emit("unapproved_event",{
+    stage:"private stage",x_error_category:"private raw response"
+  });
+  assert.deepEqual(lines,[
+    '{"event":"x_oauth_identity_lookup_failed","correlation_id":"safe-correlation","provider":"x","stage":"identity_lookup","x_http_status":403,"x_error_category":"forbidden"}'
+  ]);
 });

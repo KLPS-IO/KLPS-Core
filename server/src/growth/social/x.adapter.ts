@@ -3,6 +3,7 @@ import {
   ProviderEnvironment,
   SocialProviderDefinition
 } from "./social.types";
+import { safeXOAuthCategory } from "./x.diagnostics";
 
 const X_AUTHENTICATED_USER_URL="https://api.x.com/2/users/me";
 
@@ -36,7 +37,7 @@ const parseGrantedScopes=(value:unknown,allowed:string[]) => {
 export const exchangeXAuthorizationCode=async (
   definition:SocialProviderDefinition,
   environment:ProviderEnvironment,
-  input:{code:string;codeVerifier?:string;redirectUri:string}
+  input:{code:string;codeVerifier?:string;redirectUri:string;diagnostics?:import("./social.types").MetaOAuthDiagnostics}
 ):Promise<OAuthTokenResult> => {
   if (
     !definition.tokenUrl || !environment.clientId || !environment.clientSecret ||
@@ -44,6 +45,7 @@ export const exchangeXAuthorizationCode=async (
   ) throw xError("X OAuth is not configured","x_oauth_not_configured",503);
 
   let tokenResponse:Response;
+  input.diagnostics?.emit("x_oauth_token_exchange_started",{stage:"token_exchange"});
   try {
     tokenResponse=await fetch(definition.tokenUrl,{
       method:"POST",
@@ -61,20 +63,34 @@ export const exchangeXAuthorizationCode=async (
       signal:AbortSignal.timeout(15_000)
     });
   } catch {
+    input.diagnostics?.emit("x_oauth_token_exchange_failed",{
+      stage:"token_exchange",x_error_category:"network_failure"
+    });
     throw xError("X token exchange failed","x_token_exchange_failed");
   }
   const token=await readJson<XTokenResponse>(tokenResponse);
   if (!tokenResponse.ok || typeof token?.access_token !== "string" || !token.access_token) {
+    input.diagnostics?.emit("x_oauth_token_exchange_failed",{
+      stage:"token_exchange",x_http_status:tokenResponse.status,
+      x_error_category:safeXOAuthCategory(token,tokenResponse.status)
+    });
     throw xError("X token exchange failed","x_token_exchange_failed");
   }
+  input.diagnostics?.emit("x_oauth_token_exchange_completed",{
+    stage:"token_exchange",x_http_status:tokenResponse.status
+  });
 
   let identityResponse:Response;
+  input.diagnostics?.emit("x_oauth_identity_lookup_started",{stage:"identity_lookup"});
   try {
     identityResponse=await fetch(X_AUTHENTICATED_USER_URL,{
       headers:{"Accept":"application/json","Authorization":`Bearer ${token.access_token}`},
       signal:AbortSignal.timeout(15_000)
     });
   } catch {
+    input.diagnostics?.emit("x_oauth_identity_lookup_failed",{
+      stage:"identity_lookup",x_error_category:"network_failure"
+    });
     throw xError("X identity lookup failed","x_identity_lookup_failed");
   }
   const identity=await readJson<XUserResponse>(identityResponse);
@@ -83,7 +99,16 @@ export const exchangeXAuthorizationCode=async (
     !identityResponse.ok || typeof user?.id !== "string" || !user.id.trim() ||
     typeof user.name !== "string" || !user.name.trim() ||
     typeof user.username !== "string" || !user.username.trim()
-  ) throw xError("X identity lookup failed","x_identity_lookup_failed");
+  ) {
+    input.diagnostics?.emit("x_oauth_identity_lookup_failed",{
+      stage:"identity_lookup",x_http_status:identityResponse.status,
+      x_error_category:safeXOAuthCategory(identity,identityResponse.status)
+    });
+    throw xError("X identity lookup failed","x_identity_lookup_failed");
+  }
+  input.diagnostics?.emit("x_oauth_identity_lookup_completed",{
+    stage:"identity_lookup",x_http_status:identityResponse.status
+  });
 
   const expiresIn=typeof token.expires_in === "number" && token.expires_in > 0
     ? token.expires_in : undefined;

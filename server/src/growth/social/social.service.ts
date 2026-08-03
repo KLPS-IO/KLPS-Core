@@ -358,7 +358,10 @@ export const completeSocialOAuthFromState = async (
   const callbackDiagnostics=provider === "facebook"
     ? withMetaGrantContext(diagnostics,grantModeFromAuthorisation(row!))
     : diagnostics;
-  callbackDiagnostics?.emit("meta_oauth_state_validated",{ stage:"state_validation" });
+  callbackDiagnostics?.emit(
+    provider === "x" ? "x_oauth_state_validated" : "meta_oauth_state_validated",
+    {stage:"state_validation"}
+  );
   return completeSocialOAuthForAuthorisation(
     row!,provider,code,providerError,db,callbackDiagnostics
   );
@@ -390,8 +393,9 @@ export const completeXOAuthFromState = (
   state:string,
   code:string,
   providerError?:string,
-  db:Db=pool
-) => completeSocialOAuthFromState("x",state,code,providerError,db);
+  db:Db=pool,
+  diagnostics?:MetaOAuthDiagnostics
+) => completeSocialOAuthFromState("x",state,code,providerError,db,diagnostics);
 
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
@@ -446,6 +450,9 @@ const completeSocialOAuthForAuthorisation = async (
       stage:"connection_persistence"
     };
     try {
+      if (provider === "x") diagnostics?.emit("x_oauth_connection_persistence_started",{
+        stage:"connection_persistence"
+      });
       const connection = await inTransaction(db,async transaction => {
         const result = await transaction.query(`
       INSERT INTO growth_os.social_connections(
@@ -505,19 +512,24 @@ const completeSocialOAuthForAuthorisation = async (
         await audit(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
         return connection;
       });
-      diagnostics?.emit("meta_oauth_connection_completed",{
-        stage:"completed",
-        page_found:assets.some(asset => asset.provider === "facebook"),
-        instagram_found:assets.some(asset => asset.provider === "instagram")
-      });
+      diagnostics?.emit(
+        provider === "x" ? "x_oauth_connection_completed" : "meta_oauth_connection_completed",
+        {
+          stage:"completed",
+          page_found:assets.some(asset => asset.provider === "facebook"),
+          instagram_found:assets.some(asset => asset.provider === "instagram")
+        }
+      );
       return connection;
     } catch (reason) {
-      const internalCode = provider === "tiktok"
-        ? "tiktok_connection_persistence_failed"
+      const internalCode = provider === "x"
+        ? "x_connection_persistence_failed"
+        : provider === "tiktok" ? "tiktok_connection_persistence_failed"
         : persistence.stage === "asset_persistence"
           ? "meta_asset_persistence_failed" : "meta_connection_persistence_failed";
       diagnostics?.emit(
-        persistence.stage === "asset_persistence"
+        provider === "x" ? "x_oauth_connection_persistence_failed"
+          : persistence.stage === "asset_persistence"
           ? "meta_oauth_asset_persistence_failed"
           : "meta_oauth_connection_persistence_failed",
         {

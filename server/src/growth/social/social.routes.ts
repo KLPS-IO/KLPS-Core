@@ -18,6 +18,7 @@ import {
 } from "./social.service";
 import { SocialProvider } from "./social.types";
 import { createMetaOAuthDiagnostics } from "./meta.diagnostics";
+import { createXOAuthDiagnostics } from "./x.diagnostics";
 
 const router = express.Router();
 export const socialOAuthCallbackRoutes = express.Router();
@@ -59,6 +60,7 @@ const SOCIAL_FAILURE_CODES = {
   x_token_exchange_failed:"provider_exchange_failed",
   x_identity_lookup_failed:"identity_lookup_failed",
   x_oauth_not_configured:"connection_failed",
+  x_connection_persistence_failed:"connection_failed",
   social_oauth_binding_invalid:"connection_failed",
   social_oauth_callback_failed:"connection_failed"
 } as const;
@@ -220,10 +222,13 @@ export const handleXOAuthCallback = async (
   res:express.Response,
   complete:XCallbackCompleter=completeXOAuthFromState
 ) => {
+  const diagnostics=createXOAuthDiagnostics();
+  diagnostics.emit("x_oauth_callback_received",{stage:"callback_received"});
   try {
     await complete(
       String(req.query.state ?? ""),String(req.query.code ?? ""),
-      typeof req.query.error === "string" ? req.query.error : undefined
+      typeof req.query.error === "string" ? req.query.error : undefined,
+      undefined,diagnostics
     );
     return res.redirect(303,buildSocialOAuthRedirect({status:"connected"},"x"));
   } catch (reason) {
@@ -231,9 +236,10 @@ export const handleXOAuthCallback = async (
       typeof reason.code === "string" ? reason.code : "social_oauth_callback_failed";
     const safeCode=SOCIAL_FAILURE_CODES[code as keyof typeof SOCIAL_FAILURE_CODES] ??
       "connection_failed";
-    console.warn(JSON.stringify({
-      event:"growth_social_oauth_callback_failed",provider:"x",reason:safeCode
-    }));
+    diagnostics.emit("x_oauth_callback_redirected_with_error",{
+      stage:safeCode === "identity_lookup_failed" ? "identity_lookup"
+        : safeCode === "provider_exchange_failed" ? "token_exchange" : "callback"
+    });
     return res.redirect(303,buildSocialOAuthRedirect({status:"failed",code},"x"));
   }
 };
