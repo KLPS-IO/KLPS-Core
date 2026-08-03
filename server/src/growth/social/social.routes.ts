@@ -26,6 +26,10 @@ const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => 
 const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id,undefined,req.dataRoomUser!.role);
 const providerFrom = (value: unknown) => {
   const provider = String(value);
+  if (provider === "instagram") throw Object.assign(
+    new Error("Instagram Professional accounts are discovered through Meta"),
+    {code:"social_provider_discovered_through_meta",statusCode:409}
+  );
   getSocialAdapter(provider);
   return provider as SocialProvider;
 };

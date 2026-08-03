@@ -209,8 +209,20 @@ test("provider registry is complete and platform capability driven", () => {
   assert.deepEqual(getSocialAdapter("facebook").definition.capabilities,[]);
   assert.deepEqual(getSocialAdapter("instagram").definition.capabilities,[]);
   assert.equal(getSocialAdapter("instagram").definition.futureReady,true);
+  assert.equal(getSocialAdapter("instagram").definition.applicationName,"Discovered through Meta");
+  assert.equal(validateSocialEnvironment("instagram").reason,"Discovered through Meta");
   assert.ok(getSocialAdapter("x").definition.supportsPkce);
   assert.throws(() => getSocialAdapter("unofficial"));
+});
+
+test("standalone Instagram OAuth is unreachable while Meta asset discovery remains supported", () => {
+  const routes=readFileSync("server/src/growth/social/social.routes.ts","utf8");
+  const adapter=readFileSync("server/src/growth/social/meta.adapter.ts","utf8");
+  assert.match(routes,/provider === "instagram"/);
+  assert.match(routes,/social_provider_discovered_through_meta/);
+  assert.match(adapter,/provider: "instagram"/);
+  assert.match(adapter,/providerAssetType: "instagram_professional"/);
+  assert.match(getSocialAdapter("facebook").definition.scopes.join(" "),/instagram_basic/);
 });
 
 test("TikTok Login Kit requests identity scope only and keeps posting approval-gated", () => {

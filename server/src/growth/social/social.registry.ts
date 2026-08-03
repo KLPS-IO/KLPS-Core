@@ -43,14 +43,14 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   instagram: {
     id: "instagram", name: "Instagram Professional",
     developerAccount: "Meta for Developers account",
-    applicationName: "Meta application connected to an Instagram Professional account",
+    applicationName: "Discovered through Meta",
     authorizationUrl: null,
     tokenUrl: null,
     scopes: [],
     capabilities: [],
     requiredEnvironment: [],
     supportsPkce: false,
-    externalReview: ["Instagram professional identities are discovered through the Meta Identity connection."],
+    externalReview: ["Discovered through Meta. A separate Instagram OAuth connection is not supported."],
     futureReady: true
   },
   x: {
@@ -205,7 +205,9 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
     available: !definition.futureReady && missing.length === 0 && !encryptionMissing &&
       facebookConfiguration?.valid !== false,
     missing_environment: [...missing, ...(encryptionMissing ? ["GROWTH_SOCIAL_ENCRYPTION_KEY"] : [])],
-    reason: definition.futureReady
+    reason: provider === "instagram"
+      ? "Discovered through Meta"
+      : definition.futureReady
       ? "Provider adapter reserved for future activation"
       : facebookConfiguration?.valid === false
         ? "Facebook Login for Business configuration is malformed"
