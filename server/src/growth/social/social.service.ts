@@ -72,7 +72,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
-    const providerActivated = ["linkedin","facebook","tiktok"].includes(definition.id) && environment.available;
+    const providerActivated = ["linkedin","facebook","tiktok","x"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
       name: definition.name,
@@ -386,6 +386,13 @@ export const completeTikTokOAuthFromState = (
   db: Db = pool
 ) => completeSocialOAuthFromState("tiktok",state,code,providerError,db);
 
+export const completeXOAuthFromState = (
+  state:string,
+  code:string,
+  providerError?:string,
+  db:Db=pool
+) => completeSocialOAuthFromState("x",state,code,providerError,db);
+
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
   provider: SocialProvider,
@@ -526,7 +533,7 @@ const completeSocialOAuthForAuthorisation = async (
     }
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
-      typeof reason.code === "string" && /^(?:linkedin|meta|tiktok)_[a-z_]+$/.test(reason.code)
+      typeof reason.code === "string" && /^(?:linkedin|meta|tiktok|x)_[a-z_]+$/.test(reason.code)
       ? reason.code
       : "social_oauth_callback_failed";
     await db.query(`

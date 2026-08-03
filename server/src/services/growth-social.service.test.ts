@@ -7,6 +7,7 @@ import {
   completeLinkedInOAuthFromState,
   completeMetaOAuthFromState,
   completeTikTokOAuthFromState,
+  completeXOAuthFromState,
   completeSocialOAuth,
   disconnectSocialProvider,
   getSocialProviderOverview,
@@ -24,7 +25,8 @@ import {
   buildSocialOAuthRedirect,
   handleLinkedInOAuthCallback,
   handleMetaOAuthCallback,
-  handleTikTokOAuthCallback
+  handleTikTokOAuthCallback,
+  handleXOAuthCallback
 } from "../growth/social/social.routes";
 import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
 import {
@@ -251,14 +253,15 @@ test("TikTok Login Kit requests identity scope only and keeps posting approval-g
   } finally { process.env = previous; }
 });
 
-test("TikTok identity activation does not change other provider permissions", () => {
+test("identity activations keep provider permissions isolated", () => {
   assert.deepEqual(getSocialAdapter("linkedin").definition.scopes,["openid","profile"]);
   assert.deepEqual(getSocialAdapter("facebook").definition.scopes,[
     "public_profile","pages_show_list","instagram_basic"
   ]);
   assert.deepEqual(getSocialAdapter("x").definition.scopes,[
-    "tweet.read","tweet.write","users.read","offline.access"
+    "users.read","offline.access"
   ]);
+  assert.deepEqual(getSocialAdapter("tiktok").definition.scopes,["user.info.basic"]);
 });
 
 test("Meta authorization requests identity and discovery permissions only", async () => {
@@ -526,7 +529,8 @@ test("editing approved content resets approval by fingerprint", () => {
 test("OAuth start stores only hashed state and encrypted verifier", async () => {
   const previous = { ...process.env };
   Object.assign(process.env,{
-    X_CLIENT_ID:"client",X_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/x/callback",
+    X_CLIENT_ID:"client",X_CLIENT_SECRET:"client-secret",
+    X_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/x/callback",
     GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,8).toString("base64")
   });
   const queries: Array<{ sql:string; values:unknown[] }> = [];
@@ -536,10 +540,23 @@ test("OAuth start stores only hashed state and encrypted verifier", async () => 
   }};
   try {
     const result = await beginSocialOAuth(workspaceId,userId,"x",db as never);
-    assert.match(result.authorization_url,/code_challenge=/);
+    const url=new URL(result.authorization_url);
+    assert.equal(`${url.origin}${url.pathname}`,"https://x.com/i/oauth2/authorize");
+    assert.equal(url.searchParams.get("client_id"),"client");
+    assert.equal(url.searchParams.get("response_type"),"code");
+    assert.equal(url.searchParams.get("redirect_uri"),process.env.X_REDIRECT_URI);
+    assert.equal(url.searchParams.get("scope"),"users.read offline.access");
+    assert.equal(url.searchParams.get("code_challenge_method"),"S256");
+    for (const scope of ["tweet.write","media.write","dm.read","dm.write","follows.write","like.write"]) {
+      assert.doesNotMatch(url.searchParams.get("scope") ?? "",new RegExp(scope.replace(".","\\.")));
+    }
     const oauthInsert = queries.find(item => item.sql.includes("social_oauth_authorisations"))!;
     assert.equal(String(oauthInsert.values[2]).length,64);
     assert.match(String(oauthInsert.values[3]),/^v1\./);
+    const verifier=decryptSocialSecret(String(oauthInsert.values[3]));
+    assert.equal(url.searchParams.get("code_challenge"),createPkceChallenge(verifier));
+    assert.notEqual(url.searchParams.get("code_challenge"),verifier);
+    assert.deepEqual(oauthInsert.values[5],["users.read","offline.access"]);
     assert.doesNotMatch(JSON.stringify(queries),/code_challenge_method.*private/i);
   } finally { process.env = previous; }
 });
@@ -1588,4 +1605,134 @@ test("TikTok public callback uses safe redirects and logs only allowlisted provi
     ]);
     assert.doesNotMatch(`${redirectUrl}${warnings.join("")}`,/private-state|private-code|private token|secret|raw response|raw description/);
   } finally { console.warn=previousWarn; }
+});
+
+const withXEnvironment=async (run:() => Promise<void>) => {
+  const previousEnvironment={...process.env};
+  const previousFetch=global.fetch;
+  Object.assign(process.env,{
+    X_CLIENT_ID:"x-client-id",X_CLIENT_SECRET:"x-client-secret",
+    X_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/x/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,16).toString("base64")
+  });
+  try { await run(); }
+  finally { global.fetch=previousFetch; process.env=previousEnvironment; }
+};
+
+const validXStateBinding=() => ({
+  workspace_id:workspaceId,initiated_by:userId,redirect_uri:process.env.X_REDIRECT_URI,
+  encrypted_code_verifier:encryptSocialSecret("private-pkce-verifier"),
+  requested_scopes:["users.read","offline.access"]
+});
+
+test("X exchanges with confidential-client PKCE, retrieves the authenticated user and persists encrypted identity tokens", async () => {
+  await withXEnvironment(async () => {
+    const requests:Array<{url:string;init?:RequestInit}>=[];
+    global.fetch=async (input:string | URL | Request,init?:RequestInit) => {
+      requests.push({url:String(input),init});
+      if (requests.length === 1) return new Response(JSON.stringify({
+        token_type:"bearer",expires_in:7200,access_token:"x-access-token",
+        refresh_token:"x-refresh-token",scope:"users.read offline.access tweet.write"
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+      return new Response(JSON.stringify({
+        data:{id:"x-user-id",name:"Founder Display Name",username:"founder_handle"}
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+    };
+    const connection={
+      id:"33333333-3333-4333-8333-333333333333",provider:"x",status:"connected",
+      provider_account_name:"@founder_handle",provider_account_type:"member",
+      granted_scopes:["users.read","offline.access"],discovered_capabilities:[]
+    };
+    const {db,queries}=stateCallbackDb([validXStateBinding()]);
+    const originalQuery=db.query;
+    db.query=async (sql:string,values:unknown[]=[]) => sql.includes("INSERT INTO growth_os.social_connections")
+      ? (queries.push({sql,values}),{rows:[connection]}) : originalQuery(sql,values);
+    const result=await completeXOAuthFromState("valid-x-state","private-code",undefined,db as never);
+    assert.equal(result.provider_account_name,"@founder_handle");
+    assert.equal(requests[0].url,"https://api.x.com/2/oauth2/token");
+    assert.equal(requests[0].init?.method,"POST");
+    const headers=requests[0].init?.headers as Record<string,string>;
+    assert.equal(headers["Content-Type"],"application/x-www-form-urlencoded");
+    assert.equal(headers.Authorization,
+      `Basic ${Buffer.from("x-client-id:x-client-secret").toString("base64")}`);
+    const body=new URLSearchParams(String(requests[0].init?.body));
+    assert.deepEqual(Object.fromEntries(body),{
+      code:"private-code",grant_type:"authorization_code",
+      redirect_uri:process.env.X_REDIRECT_URI!,code_verifier:"private-pkce-verifier"
+    });
+    assert.equal(body.has("client_secret"),false);
+    assert.equal(requests[1].url,"https://api.x.com/2/users/me");
+    assert.equal((requests[1].init?.headers as Record<string,string>).Authorization,
+      "Bearer x-access-token");
+    const insert=queries.find(item => item.sql.includes("INSERT INTO growth_os.social_connections"))!;
+    assert.equal(insert.values[2],"x-user-id");
+    assert.equal(insert.values[3],"@founder_handle");
+    assert.equal(decryptSocialSecret(String(insert.values[5])),"x-access-token");
+    assert.equal(decryptSocialSecret(String(insert.values[6])),"x-refresh-token");
+    assert.deepEqual(insert.values[8],["users.read","offline.access"]);
+    assert.deepEqual(insert.values[9],[]);
+    assert.doesNotMatch(JSON.stringify(queries),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret/);
+  });
+});
+
+test("invalid and replayed X state are rejected before provider access", async () => {
+  await withXEnvironment(async () => {
+    let providerCalls=0;
+    global.fetch=async () => {providerCalls += 1; return new Response();};
+    for (const diagnosticRows of [[],[{
+      provider:"x",expired:false,consumed:true,workspace_exists:true,
+      initiator_exists:true,role:"founder_admin",initiator_owns_workspace:true
+    }]]) {
+      const {db}=stateCallbackDb([],diagnosticRows);
+      await assert.rejects(
+        completeXOAuthFromState("invalid-or-replayed","code",undefined,db as never),
+        (reason:unknown) => (reason as {code?:string}).code === "social_oauth_state_invalid"
+      );
+    }
+    assert.equal(providerCalls,0);
+  });
+});
+
+test("X denial, missing code and provider failures preserve existing encrypted credentials", async () => {
+  await withXEnvironment(async () => {
+    for (const input of [
+      {code:"",providerError:"access_denied",expected:"social_oauth_provider_error"},
+      {code:"",providerError:undefined,expected:"social_oauth_code_missing"}
+    ]) {
+      const {db,queries}=stateCallbackDb([validXStateBinding()]);
+      await assert.rejects(
+        completeXOAuthFromState("valid-state",input.code,input.providerError,db as never),
+        (reason:unknown) => (reason as {code?:string}).code === input.expected
+      );
+      const update=queries.find(item => item.sql.includes("UPDATE growth_os.social_connections"))!;
+      assert.match(update.sql,/CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END/);
+      assert.doesNotMatch(update.sql,/encrypted_(?:access|refresh)_token\s*=\s*NULL/);
+    }
+    global.fetch=async () => new Response(JSON.stringify({
+      error:"invalid_grant",error_description:"private raw response"
+    }),{status:400,headers:{"Content-Type":"application/json"}});
+    const {db,queries}=stateCallbackDb([validXStateBinding()]);
+    await assert.rejects(
+      completeXOAuthFromState("valid-state","private-code",undefined,db as never),
+      (reason:unknown) => (reason as {code?:string}).code === "x_token_exchange_failed"
+    );
+    const update=queries.find(item => item.sql.includes("last_error_code=$3"))!;
+    assert.match(update.sql,/CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END/);
+    assert.doesNotMatch(JSON.stringify(queries),/private-code|private-pkce-verifier|private raw/);
+  });
+});
+
+test("X callback is public, cookie-independent and redirects with allowlisted results", async () => {
+  let received:unknown[]=[];
+  let redirectUrl="";
+  await handleXOAuthCallback({query:{state:"state",code:"code"},headers:{}} as never,{
+    redirect:(_status:number,url:string) => {redirectUrl=url;}
+  } as never,(async (...values:unknown[]) => {received=values; return {status:"connected"};}) as never);
+  assert.deepEqual(received,["state","code",undefined]);
+  assert.equal(redirectUrl,
+    "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=x&social_status=connected");
+  assert.doesNotMatch(redirectUrl,/state|code|cookie/);
+  const routes=readFileSync("server/src/growth/social/social.routes.ts","utf8");
+  assert.match(routes,/socialOAuthCallbackRoutes\.get\(\s*"\/oauth\/x\/callback"/);
+  assert.deepEqual(getSocialAdapter("x").definition.capabilities,[]);
 });

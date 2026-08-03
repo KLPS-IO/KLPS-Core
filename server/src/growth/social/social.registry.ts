@@ -6,6 +6,7 @@ import {
 } from "./social.types";
 import { exchangeLinkedInAuthorizationCode } from "./linkedin.adapter";
 import { exchangeTikTokAuthorizationCode } from "./tiktok.adapter";
+import { exchangeXAuthorizationCode } from "./x.adapter";
 import {
   checkMetaIdentityHealth,
   exchangeMetaAuthorizationCode
@@ -57,13 +58,13 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     id: "x", name: "X",
     developerAccount: "X Developer account with an approved project",
     applicationName: "X OAuth 2.0 application",
-    authorizationUrl: "https://twitter.com/i/oauth2/authorize",
+    authorizationUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
-    scopes: ["tweet.read","tweet.write","users.read","offline.access"],
-    capabilities: ["text","images","video","threads","clickable_links","metrics","direct_publishing"],
-    requiredEnvironment: ["X_CLIENT_ID","X_REDIRECT_URI"],
+    scopes: ["users.read","offline.access"],
+    capabilities: [],
+    requiredEnvironment: ["X_CLIENT_ID","X_CLIENT_SECRET","X_REDIRECT_URI"],
     supportsPkce: true,
-    externalReview: ["Select an X API access tier that permits the intended publishing and metrics volume."]
+    externalReview: ["Enable OAuth 2.0 Authorization Code Flow with PKCE for identity lookup only."]
   },
   tiktok: {
     id: "tiktok", name: "TikTok",
@@ -166,6 +167,9 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     if (definition.id === "tiktok") {
       return exchangeTikTokAuthorizationCode(definition,providerEnv(definition.id),input);
     }
+    if (definition.id === "x") {
+      return exchangeXAuthorizationCode(definition,providerEnv(definition.id),input);
+    }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
   refreshToken: async () => {
@@ -213,7 +217,7 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
         ? "Facebook Login for Business configuration is malformed"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
-        : provider === "linkedin" || provider === "facebook" || provider === "tiktok"
+        : provider === "linkedin" || provider === "facebook" || provider === "tiktok" || provider === "x"
           ? "OAuth connection is configured"
           : "OAuth can be initiated; provider token exchange remains activation-gated"
   };
