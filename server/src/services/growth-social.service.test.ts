@@ -9,7 +9,6 @@ import {
   completeSocialOAuth,
   disconnectSocialProvider,
   getSocialProviderOverview,
-  getMetaAccountsDiagnostic,
   validatePublishReadiness
 } from "../growth/social/social.service";
 import {
@@ -25,7 +24,7 @@ import {
   handleLinkedInOAuthCallback,
   handleMetaOAuthCallback
 } from "../growth/social/social.routes";
-import { diagnoseMetaAccounts, discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
+import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
 import {
   classifyMetaProviderError,
   createMetaOAuthDiagnostics,
@@ -968,7 +967,8 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     if (url.includes("/permissions")) return new Response(JSON.stringify({ data:[
       { permission:"public_profile",status:"granted" },
       { permission:"pages_show_list",status:"granted" },
-      { permission:"instagram_basic",status:"granted" }
+      { permission:"instagram_basic",status:"granted" },
+      { permission:"business_management",status:"granted" }
     ] }),{ status:200,headers:{ "Content-Type":"application/json" } });
     return new Response(JSON.stringify({ data:[{
       id:"page-1",name:"KLPS",
@@ -978,7 +978,9 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
   const connection = {
     id:"33333333-3333-4333-8333-333333333333",
     provider:"facebook",status:"connected",provider_account_name:"Emma Mendez",
-    provider_account_type:"member",granted_scopes:["public_profile","pages_show_list","instagram_basic"],
+    provider_account_type:"member",granted_scopes:[
+      "public_profile","pages_show_list","instagram_basic","business_management"
+    ],
     discovered_capabilities:[]
   };
   const queries: Array<{ sql:string; values:unknown[] }> = [];
@@ -1010,7 +1012,7 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     assert.equal(connectionInsert.values[2],"meta-member-1");
     assert.equal(connectionInsert.values[4],"member");
     assert.deepEqual(connectionInsert.values[8],[
-      "public_profile","pages_show_list","instagram_basic"
+      "public_profile","pages_show_list","instagram_basic","business_management"
     ]);
     assert.deepEqual(connectionInsert.values[9],[]);
     const assetInsert = queries.find(item =>
@@ -1034,6 +1036,7 @@ test("Meta callback verifies identity, discovers Pages and Instagram, and persis
     assert.ok(diagnosticLines.every(line => line.includes("meta-success-correlation")));
     assert.ok(diagnosticLines.every(line => line.includes('"grant_mode":"business_configuration"')));
     assert.ok(diagnosticLines.every(line => line.includes('"config_id_configured":true')));
+    assert.ok(requests.every(url => !url.includes("/assigned_pages")));
     assert.doesNotMatch(diagnosticLines.join("\n"),/valid-meta-code|meta-access-token|meta-client-secret|meta-member-1|page-1|ig-1/);
   } finally {
     global.fetch=previousFetch;
@@ -1082,109 +1085,6 @@ test("Meta business discovery truthfully supports no managed Page", async () => 
   try {
     assert.deepEqual(await discoverMetaBusinessIdentities("temporary-token"),[]);
   } finally { global.fetch=previousFetch; }
-});
-
-test("Meta accounts diagnostic returns only counts and presence booleans", async () => {
-  const previousFetch=global.fetch;
-  const requests:Array<{url:string;authorization:string|null}>=[];
-  global.fetch=async(input,init)=>{
-    requests.push({
-      url:String(input),
-      authorization:new Headers(init?.headers).get("Authorization")
-    });
-    return new Response(JSON.stringify({data:[{
-      id:"private-page-id",name:"Private Page Name",access_token:"private-page-token",
-      instagram_business_account:{id:"private-instagram-id",username:"private-handle"}
-    }]}),{status:200,headers:{"Content-Type":"application/json"}});
-  };
-  try {
-    const result=await diagnoseMetaAccounts("private-user-token");
-    assert.deepEqual(result,{
-      http_status:200,graph_version:"v23.0",endpoint:"/me/accounts",page_count:1,
-      pages:[{
-        has_id:true,has_name:true,has_access_token:true,
-        has_instagram_business_account:true
-      }]
-    });
-    const url=new URL(requests[0].url);
-    assert.equal(url.pathname,"/v23.0/me/accounts");
-    assert.equal(
-      url.searchParams.get("fields"),
-      "id,name,access_token,instagram_business_account{id,name,username}"
-    );
-    assert.equal(requests[0].authorization,"Bearer private-user-token");
-    assert.doesNotMatch(
-      JSON.stringify(result),
-      /private-page-id|Private Page Name|private-page-token|private-instagram-id|private-handle|private-user-token/
-    );
-  } finally { global.fetch=previousFetch; }
-});
-
-test("Meta accounts diagnostic reports zero Pages without identifiers", async () => {
-  const previousFetch=global.fetch;
-  global.fetch=async()=>new Response(JSON.stringify({data:[]}),{
-    status:200,headers:{"Content-Type":"application/json"}
-  });
-  try {
-    assert.deepEqual(await diagnoseMetaAccounts("private-user-token"),{
-      http_status:200,graph_version:"v23.0",endpoint:"/me/accounts",
-      page_count:0,pages:[]
-    });
-  } finally { global.fetch=previousFetch; }
-});
-
-test("Meta accounts diagnostic allowlists Graph errors and removes raw messages", async () => {
-  const previousFetch=global.fetch;
-  global.fetch=async()=>new Response(JSON.stringify({error:{
-    message:"Private Page private-page-id cannot be accessed",
-    type:"OAuthException",code:190,error_subcode:463,is_transient:false,
-    fbtrace_id:"private-trace"
-  }}),{status:401,headers:{"Content-Type":"application/json"}});
-  try {
-    const result=await diagnoseMetaAccounts("private-user-token");
-    assert.deepEqual(result,{
-      http_status:401,graph_error_code:190,graph_error_subcode:463,error_type:"OAuthException",
-      is_transient:false
-    });
-    assert.doesNotMatch(JSON.stringify(result),/Private Page|private-page-id|private-trace|message|fbtrace/i);
-  } finally { global.fetch=previousFetch; }
-});
-
-test("Meta accounts diagnostic reads one encrypted token and performs no database writes", async () => {
-  const previousFetch=global.fetch;
-  const previousEncryptionKey=process.env.GROWTH_SOCIAL_ENCRYPTION_KEY;
-  process.env.GROWTH_SOCIAL_ENCRYPTION_KEY=Buffer.alloc(32,23).toString("base64");
-  global.fetch=async()=>new Response(JSON.stringify({data:[]}),{
-    status:200,headers:{"Content-Type":"application/json"}
-  });
-  const encryptedToken=encryptSocialSecret("private-user-token");
-  const queries:Array<{sql:string;values:unknown[]}>=[];
-  const db={query:async(sql:string,values:unknown[]=[])=>{
-    queries.push({sql,values});
-    return {rows:[{encrypted_access_token:encryptedToken}]};
-  }};
-  try {
-    const result=await getMetaAccountsDiagnostic(workspaceId,db as never);
-    assert.ok("page_count" in result);
-    assert.equal(result.page_count,0);
-    assert.equal(queries.length,1);
-    assert.match(queries[0].sql,/SELECT encrypted_access_token/);
-    assert.match(queries[0].sql,/workspace_id=\$1 AND provider='facebook' AND status='connected'/);
-    assert.doesNotMatch(queries[0].sql,/INSERT|UPDATE|DELETE/i);
-    assert.deepEqual(queries[0].values,[workspaceId]);
-    assert.doesNotMatch(JSON.stringify(result),/private-user-token/);
-  } finally {
-    global.fetch=previousFetch;
-    if (previousEncryptionKey === undefined) delete process.env.GROWTH_SOCIAL_ENCRYPTION_KEY;
-    else process.env.GROWTH_SOCIAL_ENCRYPTION_KEY=previousEncryptionKey;
-  }
-});
-
-test("temporary Meta accounts diagnostic route is founder-admin only", () => {
-  const routes=readFileSync("server/src/growth/social/social.routes.ts","utf8");
-  assert.match(routes,/router\.get\("\/diagnostics\/facebook\/pages"/);
-  assert.match(routes,/req\.dataRoomUser!\.role !== "founder_admin"/);
-  assert.match(routes,/getMetaAccountsDiagnostic\(workspace\.id\)/);
 });
 
 test("Meta Page discovery requests Page tokens, diagnoses filtering, and never logs tokens", async () => {

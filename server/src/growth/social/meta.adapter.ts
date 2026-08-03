@@ -41,25 +41,6 @@ type MetaPage = {
 
 export type MetaDiscoveredIdentity = SocialDiscoveredAsset;
 
-export type MetaAccountsDiagnostic = {
-  http_status: number;
-  graph_version: typeof META_GRAPH_VERSION;
-  endpoint: typeof META_ACCOUNTS_ENDPOINT;
-  page_count: number;
-  pages: Array<{
-    has_id: boolean;
-    has_name: boolean;
-    has_access_token: boolean;
-    has_instagram_business_account: boolean;
-  }>;
-} | {
-  http_status: number;
-  graph_error_code?: number;
-  graph_error_subcode?: number;
-  error_type?: string;
-  is_transient?: boolean;
-};
-
 const metaError = (message: string, code: string, statusCode = 502) =>
   Object.assign(new Error(message), { code, statusCode });
 
@@ -99,47 +80,6 @@ const metaAccountsRows = (payload:Record<string,unknown>) => {
   return Array.isArray(payload.data)
     ? payload.data
     : Array.isArray(nestedAccounts) ? nestedAccounts : null;
-};
-
-export const diagnoseMetaAccounts = async (
-  accessToken:string
-):Promise<MetaAccountsDiagnostic> => {
-  const response=await metaAccountsRequest(accessToken);
-  const payload=await readJson(response);
-  if (!response.ok) {
-    const safeError=safeMetaProviderError(payload);
-    return {
-      http_status:response.status,
-      ...(safeError.provider_error_code === undefined
-        ? {} : {graph_error_code:safeError.provider_error_code}),
-      ...(safeError.provider_error_subcode === undefined
-        ? {} : {graph_error_subcode:safeError.provider_error_subcode}),
-      ...(safeError.provider_error_type === undefined
-        ? {} : {error_type:safeError.provider_error_type}),
-      ...(safeError.provider_error_transient === undefined
-        ? {} : {is_transient:safeError.provider_error_transient})
-    };
-  }
-  const pages=metaAccountsRows(payload) ?? [];
-  return {
-    http_status:response.status,
-    graph_version:META_GRAPH_VERSION,
-    endpoint:META_ACCOUNTS_ENDPOINT,
-    page_count:pages.length,
-    pages:pages.map(value => {
-      const page=value && typeof value === "object"
-        ? value as MetaPage : {};
-      return {
-        has_id:Boolean(nonEmpty(page.id)),
-        has_name:Boolean(nonEmpty(page.name)),
-        has_access_token:Boolean(nonEmpty(page.access_token)),
-        has_instagram_business_account:Boolean(
-          page.instagram_business_account &&
-          typeof page.instagram_business_account === "object"
-        )
-      };
-    })
-  };
 };
 
 export const discoverMetaBusinessIdentities = async (
