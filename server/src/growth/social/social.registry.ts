@@ -5,6 +5,7 @@ import {
   SocialProviderDefinition
 } from "./social.types";
 import { exchangeLinkedInAuthorizationCode } from "./linkedin.adapter";
+import { exchangeTikTokAuthorizationCode } from "./tiktok.adapter";
 import {
   checkMetaIdentityHealth,
   exchangeMetaAuthorizationCode
@@ -74,9 +75,8 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     futurePermissions: ["video.upload","video.publish"],
     capabilities: [],
     requiredEnvironment: ["TIKTOK_CLIENT_KEY","TIKTOK_CLIENT_SECRET","TIKTOK_REDIRECT_URI"],
-    supportsPkce: true,
+    supportsPkce: false,
     externalReview: [
-      "Activate Login Kit with user.info.basic for the identity connection.",
       "Content Posting permissions video.upload and video.publish await separate provider approval and capability activation."
     ]
   },
@@ -163,6 +163,9 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     if (definition.id === "facebook") {
       return exchangeMetaAuthorizationCode(definition, providerEnv(definition.id), input);
     }
+    if (definition.id === "tiktok") {
+      return exchangeTikTokAuthorizationCode(definition,providerEnv(definition.id),input);
+    }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
   refreshToken: async () => {
@@ -208,7 +211,7 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
         ? "Facebook Login for Business configuration is malformed"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
-        : provider === "linkedin" || provider === "facebook"
+        : provider === "linkedin" || provider === "facebook" || provider === "tiktok"
           ? "OAuth connection is configured"
           : "OAuth can be initiated; provider token exchange remains activation-gated"
   };

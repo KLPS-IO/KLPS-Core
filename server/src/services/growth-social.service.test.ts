@@ -6,6 +6,7 @@ import {
   beginSocialOAuth,
   completeLinkedInOAuthFromState,
   completeMetaOAuthFromState,
+  completeTikTokOAuthFromState,
   completeSocialOAuth,
   disconnectSocialProvider,
   getSocialProviderOverview,
@@ -22,7 +23,8 @@ import { getSocialAdapter, listSocialAdapters, validateSocialEnvironment } from 
 import {
   buildSocialOAuthRedirect,
   handleLinkedInOAuthCallback,
-  handleMetaOAuthCallback
+  handleMetaOAuthCallback,
+  handleTikTokOAuthCallback
 } from "../growth/social/social.routes";
 import { discoverMetaBusinessIdentities, exchangeMetaAuthorizationCode } from "../growth/social/meta.adapter";
 import {
@@ -1378,4 +1380,200 @@ test("LinkedIn identity lookup failure never persists the exchanged token", asyn
     assert.equal(queries.some(item => item.sql.includes("INSERT INTO growth_os.social_connections")),false);
     assert.doesNotMatch(JSON.stringify(queries),/temporary-linkedin-token/);
   });
+});
+
+const withTikTokEnvironment = async (run:() => Promise<void>) => {
+  const previousEnvironment={...process.env};
+  const previousFetch=global.fetch;
+  Object.assign(process.env,{
+    TIKTOK_CLIENT_KEY:"tiktok-client",
+    TIKTOK_CLIENT_SECRET:"tiktok-client-secret",
+    TIKTOK_REDIRECT_URI:"https://api.example.com/api/growth/social/oauth/tiktok/callback",
+    GROWTH_SOCIAL_ENCRYPTION_KEY:Buffer.alloc(32,14).toString("base64")
+  });
+  try { await run(); }
+  finally { global.fetch=previousFetch; process.env=previousEnvironment; }
+};
+
+const validTikTokStateBinding = () => ({
+  workspace_id:workspaceId,
+  initiated_by:userId,
+  redirect_uri:process.env.TIKTOK_REDIRECT_URI,
+  encrypted_code_verifier:null,
+  requested_scopes:["user.info.basic"]
+});
+
+test("TikTok callback exchanges the code, verifies identity and persists encrypted identity tokens", async () => {
+  await withTikTokEnvironment(async () => {
+    const requests:Array<{url:string;init?:RequestInit}>=[];
+    global.fetch=async (input:string | URL | Request,init?:RequestInit) => {
+      requests.push({url:String(input),init});
+      if (requests.length === 1) return new Response(JSON.stringify({
+        access_token:"tiktok-access-token",refresh_token:"tiktok-refresh-token",
+        expires_in:86400,open_id:"tiktok-open-id",
+        scope:"user.info.basic,video.list",token_type:"Bearer"
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+      return new Response(JSON.stringify({
+        data:{user:{open_id:"tiktok-open-id",display_name:"TikTok Founder"}},
+        error:{code:"ok",message:"",log_id:"safe-log-id"}
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+    };
+    const connection={
+      id:"33333333-3333-4333-8333-333333333333",provider:"tiktok",status:"connected",
+      provider_account_name:"TikTok Founder",provider_account_type:"member",
+      granted_scopes:["user.info.basic"],discovered_capabilities:[]
+    };
+    const {db,queries}=stateCallbackDb([validTikTokStateBinding()]);
+    const originalQuery=db.query;
+    db.query=async (sql:string,values:unknown[]=[]) => sql.includes("INSERT INTO growth_os.social_connections")
+      ? (queries.push({sql,values}),{rows:[connection]}) : originalQuery(sql,values);
+    const result=await completeTikTokOAuthFromState(
+      "valid-tiktok-state","decoded-code",undefined,db as never
+    );
+    assert.equal(result.provider_account_name,"TikTok Founder");
+    assert.equal(requests[0].url,"https://open.tiktokapis.com/v2/oauth/token/");
+    assert.equal(requests[0].init?.method,"POST");
+    assert.equal((requests[0].init?.headers as Record<string,string>)["Content-Type"],
+      "application/x-www-form-urlencoded");
+    const body=new URLSearchParams(String(requests[0].init?.body));
+    assert.deepEqual(Object.fromEntries(body),{
+      client_key:"tiktok-client",client_secret:"tiktok-client-secret",
+      code:"decoded-code",grant_type:"authorization_code",
+      redirect_uri:process.env.TIKTOK_REDIRECT_URI!
+    });
+    assert.equal(
+      requests[1].url,
+      "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name"
+    );
+    assert.equal((requests[1].init?.headers as Record<string,string>).Authorization,
+      "Bearer tiktok-access-token");
+    const insert=queries.find(item => item.sql.includes("INSERT INTO growth_os.social_connections"))!;
+    assert.equal(insert.values[2],"tiktok-open-id");
+    assert.equal(insert.values[3],"TikTok Founder");
+    assert.equal(decryptSocialSecret(String(insert.values[5])),"tiktok-access-token");
+    assert.equal(decryptSocialSecret(String(insert.values[6])),"tiktok-refresh-token");
+    assert.deepEqual(insert.values[8],["user.info.basic"]);
+    assert.deepEqual(insert.values[9],[]);
+    assert.doesNotMatch(JSON.stringify(queries),/tiktok-access-token|tiktok-refresh-token|decoded-code/);
+  });
+});
+
+test("invalid and replayed TikTok state are rejected before TikTok access", async () => {
+  await withTikTokEnvironment(async () => {
+    let providerCalls=0;
+    global.fetch=async () => { providerCalls += 1; return new Response(); };
+    for (const diagnosticRows of [[],[{
+      provider:"tiktok",expired:false,consumed:true,workspace_exists:true,
+      initiator_exists:true,role:"founder_admin",initiator_owns_workspace:true
+    }]]) {
+      const {db}=stateCallbackDb([],diagnosticRows);
+      await assert.rejects(
+        completeTikTokOAuthFromState("invalid-or-replayed","code",undefined,db as never),
+        (reason:unknown) => (reason as {code?:string}).code === "social_oauth_state_invalid"
+      );
+    }
+    assert.equal(providerCalls,0);
+  });
+});
+
+test("TikTok denial and missing code use controlled errors and preserve an existing connection", async () => {
+  for (const input of [
+    {code:"",providerError:"access_denied",expected:"social_oauth_provider_error"},
+    {code:"",providerError:undefined,expected:"social_oauth_code_missing"}
+  ]) {
+    const {db,queries}=stateCallbackDb([validTikTokStateBinding()]);
+    await assert.rejects(
+      completeTikTokOAuthFromState("valid-state",input.code,input.providerError,db as never),
+      (reason:unknown) => (reason as {code?:string}).code === input.expected
+    );
+    const update=queries.find(item => item.sql.includes("UPDATE growth_os.social_connections"))!;
+    assert.match(update.sql,/CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END/);
+    assert.doesNotMatch(update.sql,/encrypted_(?:access|refresh)_token\s*=\s*NULL/);
+  }
+});
+
+test("TikTok token and user-info failures persist no token and preserve existing credentials", async () => {
+  await withTikTokEnvironment(async () => {
+    for (const failAt of ["token","identity"] as const) {
+      let calls=0;
+      global.fetch=async () => {
+        calls += 1;
+        if (failAt === "token") return new Response(JSON.stringify({
+          error:"invalid_grant",error_description:"private code and secret",log_id:"safe-token-log"
+        }),{status:400,headers:{"Content-Type":"application/json"}});
+        if (calls === 1) return new Response(JSON.stringify({
+          access_token:"temporary-token",refresh_token:"temporary-refresh",
+          open_id:"open-id",scope:"user.info.basic"
+        }),{status:200,headers:{"Content-Type":"application/json"}});
+        return new Response(JSON.stringify({
+          data:{},error:{code:"access_token_invalid",message:"private raw response",log_id:"safe-user-log"}
+        }),{status:401,headers:{"Content-Type":"application/json"}});
+      };
+      const {db,queries}=stateCallbackDb([validTikTokStateBinding()]);
+      await assert.rejects(
+        completeTikTokOAuthFromState("valid-state","private-code",undefined,db as never),
+        (reason:unknown) => (reason as {code?:string}).code ===
+          (failAt === "token" ? "tiktok_token_exchange_failed" : "tiktok_identity_lookup_failed")
+      );
+      assert.equal(queries.some(item => item.sql.includes("INSERT INTO growth_os.social_connections")),false);
+      assert.doesNotMatch(JSON.stringify(queries),/private-code|temporary-token|temporary-refresh|private raw/);
+      const update=queries.find(item => item.sql.includes("last_error_code=$3"))!;
+      assert.match(update.sql,/CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END/);
+    }
+  });
+});
+
+test("TikTok persistence failure rolls back replacement and reports a controlled failure", async () => {
+  await withTikTokEnvironment(async () => {
+    let calls=0;
+    global.fetch=async () => {
+      calls += 1;
+      if (calls === 1) return new Response(JSON.stringify({
+        access_token:"temporary-access",refresh_token:"temporary-refresh",
+        expires_in:86400,open_id:"open-id",scope:"user.info.basic"
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+      return new Response(JSON.stringify({
+        data:{user:{open_id:"open-id",display_name:"TikTok Founder"}},
+        error:{code:"ok",message:"",log_id:"safe-log"}
+      }),{status:200,headers:{"Content-Type":"application/json"}});
+    };
+    const {db,queries}=stateCallbackDb([validTikTokStateBinding()]);
+    const originalQuery=db.query;
+    db.query=async (sql:string,values:unknown[]=[]) => {
+      if (sql.includes("INSERT INTO growth_os.social_connections")) {
+        queries.push({sql,values});
+        throw Object.assign(new Error("private database detail"),{code:"23505"});
+      }
+      return originalQuery(sql,values);
+    };
+    await assert.rejects(
+      completeTikTokOAuthFromState("valid-state","private-code",undefined,db as never),
+      (reason:unknown) => (reason as {code?:string}).code === "tiktok_connection_persistence_failed"
+    );
+    const failureUpdate=queries.find(item => item.sql.includes("last_error_code=$3"))!;
+    assert.match(failureUpdate.sql,/CASE WHEN encrypted_access_token IS NULL THEN 'disconnected' ELSE status END/);
+    assert.doesNotMatch(JSON.stringify(queries),/temporary-access|temporary-refresh|private-code|private database/);
+  });
+});
+
+test("TikTok public callback uses safe redirects and logs only allowlisted provider diagnostics", async () => {
+  let redirectUrl="";
+  const warnings:string[]=[];
+  const previousWarn=console.warn;
+  console.warn=value => warnings.push(String(value));
+  try {
+    await handleTikTokOAuthCallback({query:{
+      state:"private-state",code:"private-code",error_description:"private raw description"
+    }} as never,{redirect:(_status:number,url:string) => {redirectUrl=url;}} as never,
+    (async () => { throw Object.assign(new Error("private token secret raw response"),{
+      code:"tiktok_token_exchange_failed",
+      providerErrorCategory:"invalid_grant",providerLogId:"safe-log-id"
+    }); }) as never);
+    assert.equal(redirectUrl,
+      "https://klps.co.uk/innovation-lab/funnel/settings?social_provider=tiktok&social_status=failed&social_error=provider_exchange_failed");
+    assert.deepEqual(warnings,[
+      '{"event":"growth_social_oauth_callback_failed","provider":"tiktok","reason":"provider_exchange_failed","provider_error_category":"invalid_grant","provider_log_id":"safe-log-id"}'
+    ]);
+    assert.doesNotMatch(`${redirectUrl}${warnings.join("")}`,/private-state|private-code|private token|secret|raw response|raw description/);
+  } finally { console.warn=previousWarn; }
 });

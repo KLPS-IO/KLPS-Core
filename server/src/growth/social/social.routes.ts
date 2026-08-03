@@ -7,6 +7,7 @@ import {
   approveSocialContentVariant,
   completeMetaOAuthFromState,
   completeLinkedInOAuthFromState,
+  completeTikTokOAuthFromState,
   completeSocialOAuth,
   createPublishJob,
   disconnectSocialProvider,
@@ -46,6 +47,10 @@ const SOCIAL_FAILURE_CODES = {
   meta_permissions_missing:"permission_lookup_failed",
   meta_asset_persistence_failed:"connection_failed",
   meta_connection_persistence_failed:"connection_failed",
+  tiktok_token_exchange_failed:"provider_exchange_failed",
+  tiktok_identity_lookup_failed:"identity_lookup_failed",
+  tiktok_oauth_not_configured:"connection_failed",
+  tiktok_connection_persistence_failed:"connection_failed",
   social_oauth_binding_invalid:"connection_failed",
   social_oauth_callback_failed:"connection_failed"
 } as const;
@@ -87,7 +92,7 @@ const socialFrontendBase = () => {
 
 export const buildSocialOAuthRedirect = (
   result: { status:"connected" } | { status:"failed"; code:string },
-  provider: "linkedin" | "facebook" = "linkedin"
+  provider: "linkedin" | "facebook" | "tiktok" = "linkedin"
 ) => {
   const url = socialFrontendBase();
   url.search = "";
@@ -116,6 +121,7 @@ router.use((req:DataRoomRequest,res,next)=>{
 
 type LinkedInCallbackCompleter = typeof completeLinkedInOAuthFromState;
 type MetaCallbackCompleter = typeof completeMetaOAuthFromState;
+type TikTokCallbackCompleter = typeof completeTikTokOAuthFromState;
 
 export const handleLinkedInOAuthCallback = async (
   req: express.Request,
@@ -170,6 +176,36 @@ export const handleMetaOAuthCallback = async (
   }
 };
 
+export const handleTikTokOAuthCallback = async (
+  req:express.Request,
+  res:express.Response,
+  complete:TikTokCallbackCompleter=completeTikTokOAuthFromState
+) => {
+  try {
+    await complete(
+      String(req.query.state ?? ""),
+      String(req.query.code ?? ""),
+      typeof req.query.error === "string" ? req.query.error : undefined
+    );
+    return res.redirect(303,buildSocialOAuthRedirect({status:"connected"},"tiktok"));
+  } catch (reason) {
+    const code=typeof reason === "object" && reason && "code" in reason &&
+      typeof reason.code === "string" ? reason.code : "social_oauth_callback_failed";
+    const providerErrorCategory=typeof reason === "object" && reason &&
+      "providerErrorCategory" in reason && typeof reason.providerErrorCategory === "string"
+      ? reason.providerErrorCategory : undefined;
+    const providerLogId=typeof reason === "object" && reason && "providerLogId" in reason &&
+      typeof reason.providerLogId === "string" ? reason.providerLogId : undefined;
+    console.warn(JSON.stringify({
+      event:"growth_social_oauth_callback_failed",provider:"tiktok",
+      reason:SOCIAL_FAILURE_CODES[code as keyof typeof SOCIAL_FAILURE_CODES] ?? "connection_failed",
+      ...(providerErrorCategory ? {provider_error_category:providerErrorCategory} : {}),
+      ...(providerLogId ? {provider_log_id:providerLogId} : {})
+    }));
+    return res.redirect(303,buildSocialOAuthRedirect({status:"failed",code},"tiktok"));
+  }
+};
+
 socialOAuthCallbackRoutes.get(
   "/oauth/linkedin/callback",
   (req,res,next) => handleLinkedInOAuthCallback(req,res).catch(next)
@@ -178,6 +214,11 @@ socialOAuthCallbackRoutes.get(
 socialOAuthCallbackRoutes.get(
   "/oauth/facebook/callback",
   (req,res,next) => handleMetaOAuthCallback(req,res).catch(next)
+);
+
+socialOAuthCallbackRoutes.get(
+  "/oauth/tiktok/callback",
+  (req,res,next) => handleTikTokOAuthCallback(req,res).catch(next)
 );
 
 router.get("/providers", asyncHandler(async (req,res) => {

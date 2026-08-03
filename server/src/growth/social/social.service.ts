@@ -72,7 +72,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
-    const providerActivated = ["linkedin","facebook"].includes(definition.id) && environment.available;
+    const providerActivated = ["linkedin","facebook","tiktok"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
       name: definition.name,
@@ -114,7 +114,9 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         ...definition.externalReview.map(detail => ({
           label: "Provider approval",
           detail,
-          status: definition.futureReady ? "future" : providerActivated ? "configured" : "external_review"
+          status: definition.futureReady ? "future"
+            : definition.futurePermissions?.length ? "external_review"
+              : providerActivated ? "configured" : "external_review"
         }))
       ]
     };
@@ -377,6 +379,13 @@ export const completeMetaOAuthFromState = (
   diagnostics?: MetaOAuthDiagnostics
 ) => completeSocialOAuthFromState("facebook",state,code,providerError,db,diagnostics);
 
+export const completeTikTokOAuthFromState = (
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool
+) => completeSocialOAuthFromState("tiktok",state,code,providerError,db);
+
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
   provider: SocialProvider,
@@ -496,8 +505,10 @@ const completeSocialOAuthForAuthorisation = async (
       });
       return connection;
     } catch (reason) {
-      const internalCode = persistence.stage === "asset_persistence"
-        ? "meta_asset_persistence_failed" : "meta_connection_persistence_failed";
+      const internalCode = provider === "tiktok"
+        ? "tiktok_connection_persistence_failed"
+        : persistence.stage === "asset_persistence"
+          ? "meta_asset_persistence_failed" : "meta_connection_persistence_failed";
       diagnostics?.emit(
         persistence.stage === "asset_persistence"
           ? "meta_oauth_asset_persistence_failed"
@@ -515,7 +526,7 @@ const completeSocialOAuthForAuthorisation = async (
     }
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
-      typeof reason.code === "string" && /^(?:linkedin|meta)_[a-z_]+$/.test(reason.code)
+      typeof reason.code === "string" && /^(?:linkedin|meta|tiktok)_[a-z_]+$/.test(reason.code)
       ? reason.code
       : "social_oauth_callback_failed";
     await db.query(`
