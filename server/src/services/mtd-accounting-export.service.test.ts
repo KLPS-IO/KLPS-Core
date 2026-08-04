@@ -69,6 +69,29 @@ test("fingerprint mismatch blocks generation before returning CSV",async()=>{
   await assert.rejects(generateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE,expected_source_fingerprint:"0".repeat(64)},userId,config,db() as never),(error:unknown)=>(error as {code?:string}).code==="accounting_export_source_changed");
 });
 
+test("validation reports draft mapping provenance and generation blocks it",async()=>{
+  const draft={id:"55555555-5555-4555-8555-555555555555",category_nominal_codes:{Software:"7001"},payment_account_nominal_codes:{founder_director_funded:"3100"},confirmed_at:null,updated_at:"2026-08-04",version:2};
+  const base=db();const configured={query:async(sql:string,params?:unknown[])=>sql.includes("finance_os.accounting_export_configs")?{rows:[draft]}:base.query(sql,params)};
+  const validation=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},undefined,configured as never);
+  assert.equal(validation.mapping_config_source,"database");assert.equal(validation.mapping_config_confirmed,false);assert.equal(validation.mapping_config_version,2);
+  await assert.rejects(generateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE,expected_source_fingerprint:validation.source_ledger_fingerprint},userId,undefined,configured as never),(error:unknown)=>(error as {code?:string}).code==="accounting_export_config_unconfirmed");
+});
+
+test("validation reports unmapped categories and payment sources",async()=>{
+  const draft={id:"55555555-5555-4555-8555-555555555555",category_nominal_codes:{},payment_account_nominal_codes:{},confirmed_at:null,updated_at:"2026-08-04",version:1};
+  const base=db();const configured={query:async(sql:string,params?:unknown[])=>sql.includes("finance_os.accounting_export_configs")?{rows:[draft]}:base.query(sql,params)};
+  const validation=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},undefined,configured as never);
+  assert.deepEqual(validation.missing_nominal_mappings,["Software"]);assert.deepEqual(validation.unmapped_payment_sources,["founder_director_funded"]);assert.equal(validation.blocked_row_count,1);
+});
+
+test("generation uses confirmed database mappings",async()=>{
+  const confirmed={id:"55555555-5555-4555-8555-555555555555",category_nominal_codes:{Software:"7001"},payment_account_nominal_codes:{founder_director_funded:"3100"},confirmed_at:"2026-08-04",updated_at:"2026-08-04",version:3};
+  const base=db();const configured={query:async(sql:string,params?:unknown[])=>sql.includes("finance_os.accounting_export_configs")?{rows:[confirmed]}:base.query(sql,params)};
+  const validation=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},undefined,configured as never);
+  const generated=await generateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE,expected_source_fingerprint:validation.source_ledger_fingerprint},userId,undefined,configured as never);
+  assert.match(generated.csv,/Reviewed software purchase/);assert.equal(generated.validation.mapping_config_confirmed,true);assert.equal(generated.validation.mapped_nominal_codes.Software,"7001");
+});
+
 test("archived expenses remain excluded and existing VAT working ledger is unchanged",()=>{
   const vat=readFileSync("server/src/services/finance-vat.service.ts","utf8");
   const routes=readFileSync("server/src/routes/finance.routes.ts","utf8");

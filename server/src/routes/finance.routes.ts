@@ -65,6 +65,11 @@ import {
   generateAccountingExport,
   validateAccountingExport
 } from "../services/mtd-accounting-export.service";
+import {
+  auditConfigValidationFailed,
+  getAccountingExportConfig,
+  saveAccountingExportConfig
+} from "../services/accounting-export-config.service";
 
 const router = express.Router();
 
@@ -225,8 +230,13 @@ router.get("/vat-ledger",asyncHandler(async(req,res)=>res.json(jsonOk({
   label:"VAT working paper – not an HMRC submission",
   transactions:await getVatLedger(req.query.vat_period_id)
 }))));
+router.get("/accounting-exports/config",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk(await getAccountingExportConfig(req.query.profile)))));
+router.put("/accounting-exports/config",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk(await saveAccountingExportConfig(req.body??{},req.dataRoomUser!.id)))));
 router.post("/accounting-exports/validate",requireFinanceWrite,asyncHandler(async(req,res)=>{
   const validation=await validateAccountingExport(req.body??{});
+  if((validation.mapping_config_source==="database"&&!validation.mapping_config_confirmed)||validation.missing_nominal_mappings.length||validation.unmapped_payment_sources.length){
+    await auditConfigValidationFailed({source:validation.mapping_config_source,version:validation.mapping_config_version,confirmed:validation.mapping_config_confirmed},req.dataRoomUser!.id,validation.missing_nominal_mappings,validation.unmapped_payment_sources);
+  }
   await auditAccountingExport(validation.blocked_row_count?"accounting_export_blocked":"accounting_export_validated",validation,req.dataRoomUser!.id);
   const {rows:_,...summary}=validation;
   return res.json(jsonOk({validation:summary}));

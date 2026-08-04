@@ -2,14 +2,19 @@ import crypto from "crypto";
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
 import { getVatLedger, listVatPeriods } from "./finance-vat.service";
+import {
+  ExportConfig,
+  loadEnvironmentExportConfig,
+  resolveAccountingExportConfig
+} from "./accounting-export-config.service";
+export type { ExportConfig } from "./accounting-export-config.service";
 
 type Db=Pick<PoolClient,"query">;
 type Json=Record<string,unknown>;
 export const MTD_EXPORT_TYPE="mtd_accounting" as const;
 export const QUICKFILE_PROFILE="quickfile_purchase_csv_v1" as const;
 export const QUICKFILE_HEADERS=["Receipt date","Supplier name","Description","Total gross amount","Currency","Exchange rate","Supplier Ref.","VAT total","VAT rate","Purchase nominal code","Paid date","Paid account nominal code"] as const;
-export type ExportConfig={categoryNominalCodes:Record<string,string>;paymentAccountNominalCodes:Record<string,string>};
-export type ExportValidation={export_type:typeof MTD_EXPORT_TYPE;profile:typeof QUICKFILE_PROFILE;validation_mode:"dry_run";generated_at:string;vat_period:Json;eligible_row_count:number;blocked_row_count:number;blocked_expense_ids:string[];blocking_reasons:Record<string,string[]>;mapped_nominal_codes:Record<string,string>;missing_nominal_mappings:string[];payment_account_mappings:Record<string,string>;adjustment_handling:{strategy:string;manual_adjustment_count:number;items:Array<{adjustment_id:string;expense_id:string;reason:string}>};expected_csv_headings:readonly string[];source_ledger_fingerprint:string;rows:ExportRow[]};
+export type ExportValidation={export_type:typeof MTD_EXPORT_TYPE;profile:typeof QUICKFILE_PROFILE;validation_mode:"dry_run";generated_at:string;vat_period:Json;eligible_row_count:number;blocked_row_count:number;blocked_expense_ids:string[];blocking_reasons:Record<string,string[]>;mapping_config_source:"database"|"environment"|"none";mapping_config_confirmed:boolean;mapping_config_version:number;mapped_nominal_codes:Record<string,string>;missing_nominal_mappings:string[];payment_account_mappings:Record<string,string>;unmapped_payment_sources:string[];adjustment_handling:{strategy:string;manual_adjustment_count:number;items:Array<{adjustment_id:string;expense_id:string;reason:string}>};expected_csv_headings:readonly string[];source_ledger_fingerprint:string;rows:ExportRow[]};
 export type ExportRow={expense_id:string;values:Record<(typeof QUICKFILE_HEADERS)[number],string>};
 
 const exportError=(message:string,code:string,statusCode=400)=>Object.assign(new Error(message),{code,statusCode});
@@ -23,16 +28,8 @@ const fingerprint=(value:unknown)=>crypto.createHash("sha256").update(JSON.strin
 const csvCell=(value:string)=>/[",\r\n]/.test(value)?`"${value.replace(/"/g,'""')}"`:value;
 export const rowsToCsv=(rows:ExportRow[])=>[QUICKFILE_HEADERS.join(","),...rows.map(row=>QUICKFILE_HEADERS.map(header=>csvCell(row.values[header])).join(","))].join("\r\n")+"\r\n";
 
-const parseMap=(name:string,value=process.env[name])=>{
-  if(!value)return {};
-  try{const parsed=JSON.parse(value);if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error();return Object.fromEntries(Object.entries(parsed).filter(([,v])=>typeof v==="string"&&v.trim()).map(([k,v])=>[normalise(k),clean(v)]));}
-  catch{throw exportError(`${name} must be a JSON object of reviewed nominal-code mappings`,`invalid_${name.toLowerCase()}`,500);}
-};
-export const loadExportConfig=():ExportConfig=>({
-  categoryNominalCodes:parseMap("MTD_ACCOUNTING_CATEGORY_NOMINAL_CODES"),
-  paymentAccountNominalCodes:parseMap("MTD_ACCOUNTING_PAYMENT_ACCOUNT_NOMINAL_CODES")
-});
-const mapping=(map:Record<string,string>,value:unknown)=>map[normalise(value)]||map.default||"";
+export const loadExportConfig=loadEnvironmentExportConfig;
+const mapping=(map:Record<string,string>,value:unknown)=>Object.entries(map).find(([key])=>normalise(key)===normalise(value))?.[1]||map.default||"";
 const paymentSource=(row:Json)=>row.founder_paid===true?"founder_director_funded":normalise(row.payment_source||row.payment_method||row.paid_by||row.payment_channel||"other");
 const supplierReference=(row:Json)=>clean(row.invoice_number)||clean(row.order_reference)||clean((row.metadata as Json|undefined)?.payment_reference)||clean(row.evidence_reference)||`FOS-${clean(row.import_key)||clean(row.id)}`;
 
@@ -67,23 +64,27 @@ export const validateExpenseForQuickFile=(row:Json,config:ExportConfig):{reasons
   }}};
 };
 
-export async function validateAccountingExport(input:Json,config=loadExportConfig(),db:Db=pool):Promise<ExportValidation>{
+export async function validateAccountingExport(input:Json,config?:ExportConfig,db:Db=pool):Promise<ExportValidation>{
   if(input.profile!==QUICKFILE_PROFILE)throw exportError("Unsupported accounting export profile","unsupported_accounting_export_profile",400);
+  const resolved=config?{config,source:"database" as const,confirmed:true,version:1,usableForGeneration:true}:await resolveAccountingExportConfig(input.profile,db);
   const periodId=clean(input.vat_period_id);if(!/^[0-9a-f-]{36}$/i.test(periodId))throw exportError("vat_period_id must be a UUID","invalid_vat_period_id");
   const periods=await listVatPeriods(db);const period=periods.find(p=>p.id===periodId);if(!period)throw exportError("VAT period not found","vat_period_not_found",404);
   const ledger=await getVatLedger(periodId,db);
   const adjustments=(await db.query(`SELECT a.id,a.expense_id,a.adjustment_type,a.adjustment_date::text adjustment_date,a.gbp_net_amount,a.gbp_vat_amount,a.gbp_gross_amount,a.reason,a.supplier_reference,a.review_status FROM finance_os.expense_adjustments a JOIN finance_os.expenses e ON e.id=a.expense_id WHERE e.archived_at IS NULL AND a.adjustment_date BETWEEN $1 AND $2 ORDER BY a.adjustment_date,a.id`,[period.start_date,period.end_date])).rows;
   const ordered=[...ledger].sort((a,b)=>`${dateOnly(a.effective_tax_point_date)}|${a.id}`.localeCompare(`${dateOnly(b.effective_tax_point_date)}|${b.id}`));
   const rows:ExportRow[]=[],blockingReasons:Record<string,string[]>={},mapped:Record<string,string>={},paymentMapped:Record<string,string>={},missing=new Set<string>();
-  for(const expense of ordered){const result=validateExpenseForQuickFile(expense,config);if(result.nominal)mapped[clean(expense.category)||"Uncategorised"]=result.nominal;else missing.add(clean(expense.category)||"Uncategorised");if(result.paymentCode)paymentMapped[paymentSource(expense)]=result.paymentCode;if(result.row)rows.push(result.row);else blockingReasons[clean(expense.id)]=result.reasons;}
+  const missingPayment=new Set<string>();
+  for(const expense of ordered){const result=validateExpenseForQuickFile(expense,resolved.config);if(result.nominal)mapped[clean(expense.category)||"Uncategorised"]=result.nominal;else missing.add(clean(expense.category)||"Uncategorised");const source=paymentSource(expense);if(result.paymentCode)paymentMapped[source]=result.paymentCode;else if(dateOnly(expense.payment_date))missingPayment.add(source);if(result.row)rows.push(result.row);else blockingReasons[clean(expense.id)]=result.reasons;}
   const manual=adjustments.map(a=>({adjustment_id:clean(a.id),expense_id:clean(a.expense_id),reason:`${clean(a.adjustment_type)} requires controlled QuickFile credit-note entry; purchase CSV does not prove safe parent linkage`}));
-  const source={period_id:periodId,profile:QUICKFILE_PROFILE,ledger:ordered.map(row=>({...row,evidence_files:(row.evidence_files as Json[]|undefined)?.map(e=>({id:e.id,type:e.type}))})),adjustments,config};
-  return{export_type:MTD_EXPORT_TYPE,profile:QUICKFILE_PROFILE,validation_mode:"dry_run",generated_at:new Date().toISOString(),vat_period:period,eligible_row_count:rows.length,blocked_row_count:Object.keys(blockingReasons).length,blocked_expense_ids:Object.keys(blockingReasons),blocking_reasons:blockingReasons,mapped_nominal_codes:mapped,missing_nominal_mappings:[...missing].sort(),payment_account_mappings:paymentMapped,adjustment_handling:{strategy:"exclude_from_purchase_csv_and_require_manual_credit_note",manual_adjustment_count:manual.length,items:manual},expected_csv_headings:QUICKFILE_HEADERS,source_ledger_fingerprint:fingerprint(source),rows};
+  const source={period_id:periodId,profile:QUICKFILE_PROFILE,ledger:ordered.map(row=>({...row,evidence_files:(row.evidence_files as Json[]|undefined)?.map(e=>({id:e.id,type:e.type}))})),adjustments,config:resolved.config,config_source:resolved.source,config_confirmed:resolved.confirmed,config_version:resolved.version};
+  return{export_type:MTD_EXPORT_TYPE,profile:QUICKFILE_PROFILE,validation_mode:"dry_run",generated_at:new Date().toISOString(),vat_period:period,eligible_row_count:rows.length,blocked_row_count:Object.keys(blockingReasons).length,blocked_expense_ids:Object.keys(blockingReasons),blocking_reasons:blockingReasons,mapping_config_source:resolved.source,mapping_config_confirmed:resolved.confirmed,mapping_config_version:resolved.version,mapped_nominal_codes:mapped,missing_nominal_mappings:[...missing].sort(),payment_account_mappings:paymentMapped,unmapped_payment_sources:[...missingPayment].sort(),adjustment_handling:{strategy:"exclude_from_purchase_csv_and_require_manual_credit_note",manual_adjustment_count:manual.length,items:manual},expected_csv_headings:QUICKFILE_HEADERS,source_ledger_fingerprint:fingerprint(source),rows};
 }
 
-export async function generateAccountingExport(input:Json,userId:string,config=loadExportConfig(),db:Db=pool){
+export async function generateAccountingExport(input:Json,userId:string,config?:ExportConfig,db:Db=pool){
   const expected=clean(input.expected_source_fingerprint);if(!/^[a-f0-9]{64}$/.test(expected))throw exportError("expected_source_fingerprint is required","invalid_source_fingerprint");
   const validation=await validateAccountingExport(input,config,db);
+  if(validation.mapping_config_source==="database"&&!validation.mapping_config_confirmed)throw exportError("Founder-saved mappings must be explicitly confirmed before generation","accounting_export_config_unconfirmed",409);
+  if(validation.mapping_config_source==="none")throw exportError("Confirmed accounting export mappings are required","accounting_export_config_missing",409);
   if(validation.source_ledger_fingerprint!==expected)throw exportError("Source ledger changed after validation","accounting_export_source_changed",409);
   if(validation.blocked_row_count>0)throw exportError("Accounting export is blocked by unresolved rows","accounting_export_validation_failed",409);
   await auditAccountingExport("accounting_export_generated",validation,userId,db);
