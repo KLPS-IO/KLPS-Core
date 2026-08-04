@@ -120,7 +120,14 @@ export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
   const requestedPeriodId=periodId?uuid(periodId):null;
   const periods=await listVatPeriods(db) as VatPeriod[];
   const result=await db.query(`SELECT e.*,e.invoice_date::text AS invoice_date,e.transaction_date::text AS transaction_date,e.payment_date::text AS payment_date,
-    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',ev.id,'filename',ev.original_filename,'type',ev.vat_evidence_type)) FROM finance_os.evidence_links l JOIN finance_os.evidence ev ON ev.id=l.evidence_id WHERE l.entity_type='expense' AND l.entity_id=e.id),'[]'::jsonb) evidence_files
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',ev.id,'filename',ev.original_filename,'type',ev.vat_evidence_type)) FROM finance_os.evidence_links l JOIN finance_os.evidence ev ON ev.id=l.evidence_id WHERE l.entity_type='expense' AND l.entity_id=e.id),'[]'::jsonb) evidence_files,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object(
+      'id',a.id,'adjustment_type',a.adjustment_type,'adjustment_date',a.adjustment_date::text,
+      'gross_amount',a.gross_amount,'gbp_gross_amount',a.gbp_gross_amount,'currency',a.currency,
+      'supplier_reference',a.supplier_reference,'reason',a.reason,'review_status',a.review_status,
+      'parent_order_reference',e.order_reference,'parent_invoice_number',e.invoice_number,
+      'evidence_files',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',aev.id,'filename',aev.original_filename,'type',aev.vat_evidence_type)) FROM finance_os.evidence_links al JOIN finance_os.evidence aev ON aev.id=al.evidence_id WHERE al.entity_type='expense_adjustment' AND al.entity_id=a.id),'[]'::jsonb)
+    ) ORDER BY a.adjustment_date,a.id) FROM finance_os.expense_adjustments a WHERE a.expense_id=e.id),'[]'::jsonb) adjustments
     FROM finance_os.expenses e WHERE e.archived_at IS NULL ORDER BY COALESCE(e.invoice_date,e.transaction_date,e.payment_date),e.created_at`);
   const resolved=result.rows.map(row=>({row,resolution:resolveVatPeriod(row,periods)})).filter(({resolution})=>!requestedPeriodId||resolution.effective_vat_period_id===requestedPeriodId);
   const duplicateKeys=new Map<string,number>();

@@ -119,6 +119,19 @@ export const createUploadedEvidenceRecord = async (input: ReturnType<typeof pars
   return inserted.rows[0];
 };
 
+export const documentChecksum = (file: Express.Multer.File) => crypto.createHash("sha256").update(file.buffer).digest("hex");
+
+export const findActiveEvidenceByChecksum = async (checksum: string, db: Db) =>
+  (await db.query(`SELECT * FROM finance_os.evidence WHERE checksum = $1 AND document_status = 'Active' LIMIT 1`, [checksum])).rows[0] ?? null;
+
+export const findExistingUploadLink = async (evidenceId: string, input: ReturnType<typeof parseDocumentUploadInput>, db: Db) => {
+  if (!input.linkedEntityType) return null;
+  return (await db.query(
+    `SELECT * FROM finance_os.evidence_links WHERE evidence_id = $1 AND entity_type = $2 AND entity_id = $3 LIMIT 1`,
+    [evidenceId, input.linkedEntityType, input.linkedEntityId]
+  )).rows[0] ?? null;
+};
+
 export const finishUploadedEvidenceRecord = async (evidenceId: string, objectKey: string, db: Db) => {
   const result = await db.query(`UPDATE finance_os.evidence SET r2_object_key = $1 WHERE id = $2 RETURNING *`, [objectKey, evidenceId]);
   return result.rows[0];

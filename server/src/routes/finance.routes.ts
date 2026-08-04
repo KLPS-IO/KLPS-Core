@@ -31,6 +31,9 @@ import {
   buildDocumentStorage,
   createOptionalUploadLink,
   createUploadedEvidenceRecord,
+  documentChecksum,
+  findActiveEvidenceByChecksum,
+  findExistingUploadLink,
   finishUploadedEvidenceRecord,
   parseDocumentUploadInput,
   validateDocumentFile
@@ -223,6 +226,10 @@ router.use(
   requireAuthorised,
   ndaMiddleware
 );
+const publicEvidence = (row: Record<string, unknown>) => {
+  const { r2_object_key: privateObjectKey, ...safe } = row;
+  return { ...safe, has_r2_object: Boolean(privateObjectKey) };
+};
 
 router.get("/vat-periods",asyncHandler(async(_req,res)=>res.json(jsonOk({vat_periods:await listVatPeriods()}))));
 router.get("/vat-periods/suggest",asyncHandler(async(req,res)=>res.json(jsonOk({vat_period:await suggestVatPeriod(req.query.tax_point_date)}))));
@@ -662,10 +669,21 @@ router.post(
     validateDocumentFile(req.file);
 
     const input = parseDocumentUploadInput(req.body ?? {});
+    const checksum = documentChecksum(req.file);
     const client = await pool.connect();
     let uploadedObjectKey: string | null = null;
     try {
       await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [checksum]);
+      const existing = await findActiveEvidenceByChecksum(checksum, client);
+      if (existing) {
+        const duplicateLink = await findExistingUploadLink(existing.id, input, client);
+        const link = duplicateLink ?? await createOptionalUploadLink(existing.id, input, req.dataRoomUser!.id, client);
+        if (link && !duplicateLink) await auditFinanceAction("evidence.linked", "evidence", existing.id, req.dataRoomUser!.id, client);
+        await auditFinanceAction("evidence.reused", "evidence", existing.id, req.dataRoomUser!.id, client);
+        await client.query("COMMIT");
+        return res.status(200).json(jsonOk({ evidence: publicEvidence(existing), link, evidence_reused: true, link_created: Boolean(link && !duplicateLink), duplicate_link: Boolean(duplicateLink) }));
+      }
       const created = await createUploadedEvidenceRecord(input, req.file, req.dataRoomUser!.id, client);
       const storage = buildDocumentStorage(input.documentCategory, created.evidence_code, input.title, input.documentDate, req.file.originalname);
       await uploadToR2(storage.objectKey, req.file.buffer, req.file.mimetype || "application/octet-stream");
@@ -674,7 +692,7 @@ router.post(
       const link = await createOptionalUploadLink(created.id, input, req.dataRoomUser!.id, client);
       await auditFinanceAction("evidence.uploaded","evidence",created.id,req.dataRoomUser!.id,client);
       await client.query("COMMIT");
-      return res.status(201).json(jsonOk({ evidence, link }));
+      return res.status(201).json(jsonOk({ evidence: publicEvidence(evidence), link, evidence_reused: false, link_created: Boolean(link), duplicate_link: false }));
     } catch (error) {
       await client.query("ROLLBACK");
       if (uploadedObjectKey) {
@@ -760,7 +778,7 @@ router.get(
   "/evidence",
   asyncHandler(async (req, res) => {
     const evidence = await listEvidence(req.query);
-    return res.json(jsonOk({ evidence }));
+    return res.json(jsonOk({ evidence: evidence.map(publicEvidence) }));
   })
 );
 
@@ -771,7 +789,7 @@ router.get(
       req.params.entityType,
       req.params.entityId
     );
-    return res.json(jsonOk({ evidence }));
+    return res.json(jsonOk({ evidence: evidence.map(publicEvidence) }));
   })
 );
 
@@ -779,7 +797,7 @@ router.get(
   "/evidence/:id",
   asyncHandler(async (req, res) => {
     const evidence = await getEvidence(getParam(req.params.id));
-    return res.json(jsonOk({ evidence }));
+    return res.json(jsonOk({ evidence: publicEvidence(evidence) }));
   })
 );
 
@@ -797,7 +815,7 @@ router.patch(
         client
       );
       await client.query("COMMIT");
-      return res.json(jsonOk({ evidence }));
+      return res.json(jsonOk({ evidence: publicEvidence(evidence) }));
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -811,7 +829,7 @@ router.get(
   "/evidence/:id/versions",
   asyncHandler(async (req, res) => {
     const versions = await getEvidenceVersions(getParam(req.params.id));
-    return res.json(jsonOk({ versions }));
+    return res.json(jsonOk({ versions: versions.map(publicEvidence) }));
   })
 );
 

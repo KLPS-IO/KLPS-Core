@@ -17,6 +17,8 @@ import { requireFinanceWrite } from "../routes/finance.routes";
 import {
   buildDocumentStorage,
   createOptionalUploadLink,
+  documentChecksum,
+  findActiveEvidenceByChecksum,
   parseDocumentUploadInput
 } from "./document-upload.service";
 
@@ -79,6 +81,55 @@ test("document upload accepts a complete canonical expense link", () => {
   assert.equal(linked.linkedEntityType, "expense");
   assert.equal(linked.linkedEntityId, ENTITY_ID);
   assert.equal(linked.relationship, "Verifies supplier invoice and payment");
+});
+
+test("document upload accepts a complete canonical expense adjustment link", () => {
+  const linked = parseDocumentUploadInput({
+    title: "Refund confirmation", document_category: "Finance",
+    linked_entity_type: "expense_adjustment", linked_entity_id: ENTITY_ID,
+    relationship: "refund_confirmation"
+  });
+  assert.equal(linked.linkedEntityType, "expense_adjustment");
+});
+
+test("expense adjustment evidence links validate the canonical adjustment target", async () => {
+  const queries: string[] = [];
+  const db = { query: async (sql: string) => {
+    queries.push(sql);
+    if (queries.length === 1) return { rows: [{ id: EVIDENCE_ID }] };
+    if (queries.length === 2) return { rows: [{ id: ENTITY_ID }] };
+    return { rows: [{ id: "77777777-7777-4777-8777-777777777777", entity_type: "expense_adjustment", entity_id: ENTITY_ID }] };
+  }};
+  const link = await linkEvidence(EVIDENCE_ID, { entity_type: "expense_adjustment", entity_id: ENTITY_ID, relationship: "refund_confirmation" }, USER_ID, db as never);
+  assert.match(queries[1], /finance_os\.expense_adjustments/);
+  assert.equal(link.entity_type, "expense_adjustment");
+});
+
+test("missing adjustment targets are rejected and duplicate adjustment links conflict", async () => {
+  let call = 0;
+  const missing = { query: async () => ({ rows: ++call === 1 ? [{ id: EVIDENCE_ID }] : [] }) };
+  await assert.rejects(linkEvidence(EVIDENCE_ID, { entity_type: "expense_adjustment", entity_id: ENTITY_ID, relationship: "refund_confirmation" }, USER_ID, missing as never), (reason: unknown) => (reason as { code?: string }).code === "linked_entity_not_found");
+  call = 0;
+  const duplicate = { query: async () => { call += 1; if (call <= 2) return { rows: [{ id: call === 1 ? EVIDENCE_ID : ENTITY_ID }] }; throw Object.assign(new Error("duplicate"), { code: "23505" }); } };
+  await assert.rejects(linkEvidence(EVIDENCE_ID, { entity_type: "expense_adjustment", entity_id: ENTITY_ID, relationship: "refund_confirmation" }, USER_ID, duplicate as never), (reason: unknown) => (reason as { code?: string }).code === "duplicate_evidence_link");
+});
+
+test("checksum lookup reuses an active canonical evidence record", async () => {
+  const file = { buffer: Buffer.from("same document") } as Express.Multer.File;
+  const checksum = documentChecksum(file);
+  let params: unknown[] = [];
+  const db = { query: async (_sql: string, values?: unknown[]) => { params = values ?? []; return { rows: [{ id: EVIDENCE_ID, checksum }] }; } };
+  assert.equal((await findActiveEvidenceByChecksum(checksum, db as never)).id, EVIDENCE_ID);
+  assert.equal(params[0], checksum);
+});
+
+test("adjustment evidence migration preserves every prior type and rollback refuses linked adjustments", () => {
+  const forward = require("node:fs").readFileSync("server/sql/20260807_expense_adjustment_evidence_links.sql", "utf8");
+  const rollback = require("node:fs").readFileSync("server/sql/20260807_expense_adjustment_evidence_links.rollback.sql", "utf8");
+  for (const type of LINKED_ENTITY_TYPES) assert.match(forward, new RegExp(`'${type}'`));
+  assert.match(forward, /'expense_adjustment'/);
+  assert.match(rollback, /Rollback refused: expense_adjustment evidence links exist/);
+  assert.doesNotMatch(rollback, /DELETE FROM|DROP TABLE|TRUNCATE/i);
 });
 
 test("document storage naming follows the canonical Finance OS mapping", () => {
@@ -447,7 +498,7 @@ test("delete everywhere requires exact explicit confirmation", async () => {
 test("canonical evidence supports every WP1 provenance entity while KPI stays unsupported", async () => {
   assert.deepEqual(LINKED_ENTITY_TYPES, [
     "assumption", "product", "decision", "risk", "company", "funding", "kpi",
-    "report", "scenario", "hire", "document", "expense", "rd_work_package",
+    "report", "scenario", "hire", "document", "expense", "expense_adjustment", "rd_work_package",
     "rd_supplier", "rd_interaction", "rd_finding", "rd_action", "rd_rfq", "rd_quotation"
   ]);
   const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID }] }) };
