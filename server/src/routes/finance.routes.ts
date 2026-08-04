@@ -60,6 +60,11 @@ import {
   suggestVatPeriod,
   updateHistoricalExpense
 } from "../services/finance-vat.service";
+import {
+  auditAccountingExport,
+  generateAccountingExport,
+  validateAccountingExport
+} from "../services/mtd-accounting-export.service";
 
 const router = express.Router();
 
@@ -220,6 +225,31 @@ router.get("/vat-ledger",asyncHandler(async(req,res)=>res.json(jsonOk({
   label:"VAT working paper – not an HMRC submission",
   transactions:await getVatLedger(req.query.vat_period_id)
 }))));
+router.post("/accounting-exports/validate",requireFinanceWrite,asyncHandler(async(req,res)=>{
+  const validation=await validateAccountingExport(req.body??{});
+  await auditAccountingExport(validation.blocked_row_count?"accounting_export_blocked":"accounting_export_validated",validation,req.dataRoomUser!.id);
+  const {rows:_,...summary}=validation;
+  return res.json(jsonOk({validation:summary}));
+}));
+router.post("/accounting-exports/generate",requireFinanceWrite,asyncHandler(async(req,res)=>{
+  let generated:Awaited<ReturnType<typeof generateAccountingExport>>;
+  try{
+    generated=await generateAccountingExport(req.body??{},req.dataRoomUser!.id);
+  }catch(error){
+    try{
+      const validation=await validateAccountingExport(req.body??{});
+      await auditAccountingExport("accounting_export_blocked",validation,req.dataRoomUser!.id);
+    }catch{/* Unsupported or malformed requests have no valid export context to audit. */}
+    throw error;
+  }
+  await auditAccountingExport("accounting_export_downloaded",generated.validation,req.dataRoomUser!.id);
+  const period=generated.validation.vat_period as {start_date?:unknown;end_date?:unknown};
+  const filename=`mtd-accounting-${String(period.start_date).slice(0,10)}-${String(period.end_date).slice(0,10)}.csv`;
+  res.setHeader("Content-Type","text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition",`attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control","private, no-store");
+  return res.status(200).send(generated.csv);
+}));
 router.post("/expenses",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({expense:await createHistoricalExpense(req.body??{},req.dataRoomUser!.id)}))));
 router.patch("/expenses/:id",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({expense:await updateHistoricalExpense(getParam(req.params.id),req.body??{},req.dataRoomUser!.id)}))));
 router.post("/expenses/:id/archive",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({expense:await archiveHistoricalExpense(getParam(req.params.id),req.body?.change_reason,req.dataRoomUser!.id)}))));
