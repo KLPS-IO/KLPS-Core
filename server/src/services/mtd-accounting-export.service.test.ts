@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   generateAccountingExport,
+  manualAdjustmentProjection,
   MTD_EXPORT_TYPE,
   QUICKFILE_HEADERS,
   QUICKFILE_PROFILE,
@@ -16,6 +17,7 @@ import {
 const periodId="11111111-1111-4111-8111-111111111111",expenseId="22222222-2222-4222-8222-222222222222",userId="33333333-3333-4333-8333-333333333333";
 const config:ExportConfig={categoryNominalCodes:{software:"7001"},paymentAccountNominalCodes:{founder_director_funded:"3100",paypal:"1201"}};
 const valid={id:expenseId,import_key:"expense-1",name:"Software purchase",description:"Reviewed software purchase",supplier_name:"Supplier Ltd",category:"Software",currency:"GBP",invoice_date:"2026-06-01",transaction_date:"2026-06-02",payment_date:"2026-06-02",gbp_net_amount:"10.00",gbp_vat_amount:"2.00",gbp_gross_amount:"12.00",vat_amount:"2.00",vat_rate:"0.20",vat_treatment:"standard_rated",vat_review_status:"review_complete",supplier_country:"GB",invoice_number:"INV-1",founder_paid:true,evidence_files:[{id:"e",type:"full_vat_invoice"},{id:"p",type:"proof_of_payment"}],warnings:[]};
+const adjustment={id:"44444444-4444-4444-8444-444444444444",expense_id:expenseId,adjustment_type:"partial_refund",adjustment_date:"2026-06-03",gross_amount:"0.99",currency:"GBP",gbp_gross_amount:"0.99",net_amount:"0.83",vat_amount:"0.16",gbp_net_amount:"0.83",gbp_vat_amount:"0.16",supplier_reference:"REFUND-1",reason:"Reviewed partial refund",review_status:"review_complete",parent_supplier_name:"Supplier Ltd",parent_transaction_date:"2026-06-02",parent_invoice_date:"2026-06-01",parent_payment_date:"2026-06-02",parent_order_reference:"ORDER-1",parent_invoice_number:"INV-1",parent_payment_reference:"PAY-1",parent_gross_amount:"12.00",parent_stable_reference:"expense-1"};
 
 test("QuickFile purchase CSV uses the exact provider headings and deterministic CRLF output",()=>{
   assert.deepEqual(QUICKFILE_HEADERS,["Receipt date","Supplier name","Description","Total gross amount","Currency","Exchange rate","Supplier Ref.","VAT total","VAT rate","Purchase nominal code","Paid date","Paid account nominal code"]);
@@ -57,12 +59,30 @@ const db=(expense={...valid},adjustments:Record<string,unknown>[]=[]):{query:(sq
 }});
 
 test("validation is provider-neutral, deterministic and reports manual refund handling",async()=>{
-  const adjustments=[{id:"44444444-4444-4444-8444-444444444444",expense_id:expenseId,adjustment_type:"partial_refund",adjustment_date:"2026-06-03",gbp_gross_amount:"0.99",review_status:"review_complete"}];
+  const adjustments=[adjustment];
   const first=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,adjustments) as never);
   const second=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,adjustments) as never);
   assert.equal(first.export_type,MTD_EXPORT_TYPE);assert.equal(first.eligible_row_count,1);assert.equal(first.blocked_row_count,0);
   assert.equal(first.adjustment_handling.strategy,"exclude_from_purchase_csv_and_require_manual_credit_note");assert.equal(first.adjustment_handling.manual_adjustment_count,1);
+  const item=first.adjustment_handling.items[0];assert.equal(item.gross_amount,"0.99");assert.equal(item.gbp_gross_amount,"0.99");assert.equal(item.adjustment_date,"2026-06-03");assert.equal(item.supplier_reference,"REFUND-1");assert.equal(item.parent_supplier_name,"Supplier Ltd");assert.equal(item.effective_parent_reference,"INV-1");assert.equal(item.included_in_primary_csv,false);
+  assert.equal(first.blocked_row_count,0);assert.equal(first.eligible_row_count,1);
+  assert.equal("r2_object_key" in item,false);assert.equal("evidence_files" in item,false);assert.equal("filename" in item,false);
   assert.equal(first.source_ledger_fingerprint,second.source_ledger_fingerprint);
+});
+
+test("manual adjustment reference resolution prefers commercial references then stable expense identity",()=>{
+  assert.equal(manualAdjustmentProjection(adjustment).effective_parent_reference,"INV-1");
+  assert.equal(manualAdjustmentProjection({...adjustment,parent_invoice_number:null}).effective_parent_reference,"ORDER-1");
+  assert.equal(manualAdjustmentProjection({...adjustment,parent_invoice_number:null,parent_order_reference:null}).effective_parent_reference,"PAY-1");
+  assert.equal(manualAdjustmentProjection({...adjustment,parent_invoice_number:null,parent_order_reference:null,parent_payment_reference:null}).effective_parent_reference,"expense-1");
+});
+
+test("adjustment changes alter the source fingerprint and stale generation is rejected",async()=>{
+  const first=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,[adjustment]) as never);
+  const changed={...adjustment,gbp_gross_amount:"1.00"};
+  const second=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,[changed]) as never);
+  assert.notEqual(first.source_ledger_fingerprint,second.source_ledger_fingerprint);
+  await assert.rejects(generateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE,expected_source_fingerprint:first.source_ledger_fingerprint},userId,config,db(valid,[changed]) as never),(error:unknown)=>(error as {code?:string}).code==="accounting_export_source_changed");
 });
 
 test("fingerprint mismatch blocks generation before returning CSV",async()=>{
