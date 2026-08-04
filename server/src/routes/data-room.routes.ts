@@ -567,23 +567,25 @@ router.get(
     const result = await pool.query(
       `
       SELECT
-        id,
-        filename,
-        category,
-        description,
-        file_size,
-        version,
-        uploaded_at,
-        updated_at,
-        access_level,
-        storage_provider,
-        content_type,
-        sort_order,
-        watermark_required,
-        active
-      FROM data_room.documents
-      WHERE active = true
-      ORDER BY category, sort_order, filename
+        d.id,
+        d.evidence_id,
+        COALESCE(e.original_filename, d.filename) AS filename,
+        d.category,
+        COALESCE(e.description, d.description) AS description,
+        COALESCE(e.file_size, d.file_size) AS file_size,
+        CASE WHEN e.file_version IS NULL THEN d.version ELSE e.file_version::text END AS version,
+        d.uploaded_at,
+        d.updated_at,
+        d.access_level,
+        CASE WHEN e.id IS NULL THEN d.storage_provider ELSE e.storage_provider END AS storage_provider,
+        COALESCE(e.mime_type, d.content_type) AS content_type,
+        d.sort_order,
+        d.watermark_required,
+        d.active
+      FROM data_room.documents d
+      LEFT JOIN finance_os.evidence e ON e.id = d.evidence_id
+      WHERE d.active = true
+      ORDER BY d.category, d.sort_order, COALESCE(e.original_filename, d.filename)
       `
     );
 
@@ -702,15 +704,16 @@ router.get(
       `
       SELECT
         d.id,
-        d.filename,
-        d.storage_path,
-        d.storage_provider,
+        COALESCE(e.original_filename, d.filename) AS filename,
+        COALESCE(e.r2_object_key, d.storage_path) AS storage_path,
+        CASE WHEN e.id IS NULL THEN d.storage_provider ELSE e.storage_provider END AS storage_provider,
         d.access_level,
         d.active,
         u.email,
         u.role,
         u.access_tier
       FROM data_room.documents d
+      LEFT JOIN finance_os.evidence e ON e.id = d.evidence_id
       CROSS JOIN data_room.users u
       WHERE d.id = $1
         AND u.id = $2
@@ -1144,23 +1147,59 @@ router.post(
       content_type,
       sort_order,
       access_level,
-      watermark_required
+      watermark_required,
+      evidence_id
     } = req.body ?? {};
     const safeAccessLevel =
       normalizeAccessLevel(
         access_level,
         "investor_nda"
       );
-    const safeStorageProvider =
+    let safeStorageProvider =
       storage_provider === "r2"
         ? "r2"
         : "local";
+    let safeFilename = filename;
+    let safeDescription = description;
+    let safeFileSize = file_size;
+    let safeVersion = version;
+    let safeStoragePath = storage_path;
+    let safeContentType = content_type;
+
+    if (evidence_id !== undefined) {
+      if (typeof evidence_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(evidence_id)) {
+        return res.status(400).json({ status:"error", code:"invalid_evidence_id", message:"evidence_id must be a UUID" });
+      }
+      const existingPresentation = await pool.query(
+        `SELECT id FROM data_room.documents WHERE evidence_id=$1 LIMIT 1`,
+        [evidence_id]
+      );
+      if (existingPresentation.rows[0]) {
+        return res.status(409).json({ status:"error", code:"evidence_already_presented", message:"Canonical evidence is already present in the Data Room" });
+      }
+      const canonical = await pool.query(
+        `SELECT id,title,description,original_filename,file_size,file_version,r2_object_key,storage_provider,mime_type
+         FROM finance_os.evidence WHERE id=$1 LIMIT 1`,
+        [evidence_id]
+      );
+      const evidence = canonical.rows[0];
+      if (!evidence || !evidence.r2_object_key || evidence.storage_provider !== "r2") {
+        return res.status(422).json({ status:"error", code:"canonical_evidence_unavailable", message:"Canonical evidence with an R2 object is required" });
+      }
+      safeFilename = evidence.original_filename ?? evidence.title;
+      safeDescription = evidence.description;
+      safeFileSize = evidence.file_size;
+      safeVersion = String(evidence.file_version);
+      safeStoragePath = evidence.r2_object_key;
+      safeStorageProvider = "r2";
+      safeContentType = evidence.mime_type;
+    }
 
     if (
-      typeof filename !== "string" ||
+      typeof safeFilename !== "string" ||
       typeof category !== "string" ||
-      typeof version !== "string" ||
-      typeof storage_path !== "string" ||
+      typeof safeVersion !== "string" ||
+      typeof safeStoragePath !== "string" ||
       (
         access_level !== undefined &&
         !isDocumentAccessLevel(access_level)
@@ -1192,27 +1231,29 @@ router.post(
         content_type,
         sort_order,
         access_level,
-        watermark_required
+        watermark_required,
+        evidence_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
       `,
       [
-        filename.trim(),
+        safeFilename.trim(),
         category.trim(),
-        typeof description === "string"
-          ? description.trim()
+        typeof safeDescription === "string"
+          ? safeDescription.trim()
           : null,
-        Number(file_size ?? 0),
-        version.trim(),
-        storage_path.trim(),
+        Number(safeFileSize ?? 0),
+        safeVersion.trim(),
+        safeStoragePath.trim(),
         safeStorageProvider,
-        typeof content_type === "string"
-          ? content_type
+        typeof safeContentType === "string"
+          ? safeContentType
           : null,
         Number(sort_order ?? 0),
         safeAccessLevel,
-        watermark_required !== false
+        watermark_required !== false,
+        evidence_id ?? null
       ]
     );
 

@@ -916,11 +916,12 @@ router.post(
           rationale,
           status,
           metadata,
+          interaction_id,
           created_by,
           updated_by,
           change_reason
         )
-        VALUES ($1, $2, $3, $4, COALESCE($5, 'open'), $6, $7, $7, $8)
+        VALUES ($1, $2, $3, $4, COALESCE($5, 'open'), $6, $7, $8, $8, $9)
         RETURNING *
         `,
         [
@@ -930,6 +931,7 @@ router.post(
           optionalText(req.body?.rationale),
           optionalText(req.body?.status),
           JSON.stringify(parseJsonObject(req.body?.metadata)),
+          optionalText(req.body?.interaction_id),
           req.dataRoomUser!.id,
           changeReason
         ]
@@ -1018,11 +1020,12 @@ router.post(
           owner,
           status,
           metadata,
+          interaction_id,
           created_by,
           updated_by,
           change_reason
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'open'), $10, $11, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'open'), $10, $11, $12, $12, $13)
         RETURNING *
         `,
         [
@@ -1036,6 +1039,7 @@ router.post(
           optionalText(req.body?.owner),
           optionalText(req.body?.status),
           JSON.stringify(parseJsonObject(req.body?.metadata)),
+          optionalText(req.body?.interaction_id),
           req.dataRoomUser!.id,
           changeReason
         ]

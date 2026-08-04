@@ -4,7 +4,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hashPassword, validateFounderPassword, verifyPassword } from "../rd-lab/rd-auth.service";
-import { requireRdFounder, validateRdPayload } from "../rd-lab/rd-lab.service";
+import { listRecords, requireRdFounder, validateRdPayload } from "../rd-lab/rd-lab.service";
 
 test("founder passwords are strength checked, scrypt hashed and verifiable", async () => {
   assert.throws(() => validateFounderPassword("too-short"), /14 characters/);
@@ -54,6 +54,43 @@ test("quotation money remains nullable and finite numeric strings are accepted",
     supplier_id:"33333333-3333-4333-8333-333333333333",work_package_id:"44444444-4444-4444-8444-444444444444",
     quote_reference:"Q-2",likely_amount:"Not confirmed",change_reason:"Initial quote"
   }),/finite money/);
+});
+
+test("findings and actions accept interaction provenance with controlled review fields", () => {
+  const finding=validateRdPayload("findings",{work_package_id:"44444444-4444-4444-8444-444444444444",interaction_id:"33333333-3333-4333-8333-333333333333",title:"Finding",finding:"Evidence-led finding",confidence:0.7,verification_status:"Under Review",founder_review_required:true,change_reason:"Captured provenance"});
+  assert.equal(finding.confidence,0.7);
+  assert.equal(finding.founder_review_required,true);
+  assert.throws(()=>validateRdPayload("findings",{work_package_id:"44444444-4444-4444-8444-444444444444",title:"Finding",finding:"Finding",confidence:1.2,change_reason:"Captured provenance"}),/between 0 and 1/);
+  const action=validateRdPayload("actions",{work_package_id:"44444444-4444-4444-8444-444444444444",interaction_id:"33333333-3333-4333-8333-333333333333",title:"Action",owner:"Founder",priority:"High",change_reason:"Captured provenance"});
+  assert.equal(action.interaction_id,"33333333-3333-4333-8333-333333333333");
+});
+
+test("interaction timelines expose provenance and order by occurrence then creation", async () => {
+  let sql="";
+  await listRecords("interactions","44444444-4444-4444-8444-444444444444",{}, {query:async(statement:string)=>{sql=statement;return {rows:[]};}} as never);
+  for(const relation of ["linked_evidence","linked_findings","linked_actions","linked_decisions","linked_risks"]) assert.match(sql,new RegExp(relation));
+  assert.match(sql,/ORDER BY i\.occurred_at DESC NULLS LAST,i\.created_at DESC/);
+});
+
+test("provenance migration is additive and does not expand procurement statuses", () => {
+  const sql=readFileSync(join(process.cwd(),"server/sql/20260804_wp1_provenance_evidence.sql"),"utf8");
+  assert.match(sql,/rd_interaction.*rd_finding.*rd_action/s);
+  assert.match(sql,/ADD COLUMN IF NOT EXISTS evidence_id/);
+  assert.match(sql,/finance_evidence_checksum_unique/);
+  assert.doesNotMatch(sql,/Preparing Technical Specification/);
+  assert.doesNotMatch(sql,/INSERT INTO rd_lab\.suppliers/);
+  assert.match(sql,/^BEGIN;/);
+  assert.match(sql,/COMMIT;\s*$/);
+  const rollback=readFileSync(join(process.cwd(),"server/sql/20260804_wp1_provenance_evidence.rollback.sql"),"utf8");
+  for(const field of ["evidence_id","interaction_id","confidence","verification_status","founder_review_required"]) assert.match(rollback,new RegExp(`DROP COLUMN IF EXISTS ${field}`));
+});
+
+test("Data Room presents canonical evidence without creating a second document upload", () => {
+  const routes=readFileSync(join(process.cwd(),"server/src/routes/data-room.routes.ts"),"utf8");
+  assert.match(routes,/LEFT JOIN finance_os\.evidence e ON e\.id = d\.evidence_id/);
+  assert.match(routes,/COALESCE\(e\.r2_object_key, d\.storage_path\)/);
+  assert.match(routes,/evidence_already_presented/);
+  assert.match(routes,/Canonical evidence with an R2 object is required/);
 });
 
 test("migration seeds only WP1 and adds R&D evidence targets without suppliers", () => {

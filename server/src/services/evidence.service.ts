@@ -24,7 +24,8 @@ export const VAT_EVIDENCE_TYPES = [
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
   "report", "scenario", "hire", "document", "expense",
-  "rd_work_package", "rd_supplier", "rd_rfq", "rd_quotation"
+  "rd_work_package", "rd_supplier", "rd_interaction", "rd_finding",
+  "rd_action", "rd_rfq", "rd_quotation"
 ] as const;
 
 type Db = Pick<PoolClient, "query">;
@@ -169,6 +170,8 @@ const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>>
   scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",
   company: "finance_os.company", expense: "finance_os.expenses",
   rd_work_package: "rd_lab.work_packages", rd_supplier: "rd_lab.suppliers",
+  rd_interaction: "rd_lab.interactions", rd_finding: "rd_lab.technical_findings",
+  rd_action: "rd_lab.action_items",
   rd_rfq: "rd_lab.rfqs", rd_quotation: "rd_lab.quotations"
 };
 

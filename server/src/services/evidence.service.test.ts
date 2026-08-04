@@ -444,11 +444,11 @@ test("delete everywhere requires exact explicit confirmation", async () => {
   );
 });
 
-test("existing evidence entity types remain available while KPI stays unsupported", async () => {
+test("canonical evidence supports every WP1 provenance entity while KPI stays unsupported", async () => {
   assert.deepEqual(LINKED_ENTITY_TYPES, [
     "assumption", "product", "decision", "risk", "company", "funding", "kpi",
     "report", "scenario", "hire", "document", "expense", "rd_work_package",
-    "rd_supplier", "rd_rfq", "rd_quotation"
+    "rd_supplier", "rd_interaction", "rd_finding", "rd_action", "rd_rfq", "rd_quotation"
   ]);
   const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID }] }) };
   await assert.rejects(
@@ -460,6 +460,15 @@ test("existing evidence entity types remain available while KPI stays unsupporte
     (reason: unknown) => (reason as { code?: string; statusCode?: number }).code === "unsupported_evidence_entity" &&
       (reason as { statusCode?: number }).statusCode === 422
   );
+});
+
+test("one canonical evidence entity can support multiple provenance targets", async () => {
+  const inserts:string[]=[];
+  const db={query:async(sql:string)=>{inserts.push(sql);return {rows:[{id:ENTITY_ID}]};}};
+  for(const entity_type of ["rd_supplier","rd_interaction","rd_finding","rd_action","decision","risk","rd_rfq","rd_quotation","rd_work_package"])
+    await linkEvidence(EVIDENCE_ID,{entity_type,entity_id:ENTITY_ID,relationship:"supports"},USER_ID,db as never);
+  assert.equal(inserts.filter(sql=>/INSERT INTO finance_os\.evidence_links/.test(sql)).length,9);
+  assert.ok(inserts.every(sql=>!/INSERT INTO finance_os\.evidence \(/.test(sql)));
 });
 
 test("updates snapshot the prior version and set update audit fields", async () => {
