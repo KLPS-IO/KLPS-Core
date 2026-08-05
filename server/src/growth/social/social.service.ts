@@ -264,6 +264,7 @@ const diagnoseProviderStateFailure = async (
   db: Db,
   diagnostics?: MetaOAuthDiagnostics
 ): Promise<never> => {
+  const stateRejectedEvent=provider === "x" ? "x_oauth_state_rejected" : "meta_oauth_state_rejected";
   const result = await db.query(`
     SELECT
       a.provider,
@@ -281,19 +282,19 @@ const diagnoseProviderStateFailure = async (
   `, [stateHash]);
   const row = result.rows[0];
   if (!row || row.provider !== provider) {
-    diagnostics?.emit("meta_oauth_state_rejected",{
+    diagnostics?.emit(stateRejectedEvent,{
       internal_error_code:"meta_state_invalid",stage:"state_validation"
     });
     throw invalidState();
   }
   if (row.expired) {
-    diagnostics?.emit("meta_oauth_state_rejected",{
+    diagnostics?.emit(stateRejectedEvent,{
       internal_error_code:"meta_state_expired",stage:"state_validation"
     });
     throw socialError("OAuth state has expired", "social_oauth_state_expired", 409);
   }
   if (row.consumed) {
-    diagnostics?.emit("meta_oauth_state_rejected",{
+    diagnostics?.emit(stateRejectedEvent,{
       internal_error_code:"meta_state_invalid",stage:"state_validation"
     });
     throw invalidState();
@@ -304,7 +305,7 @@ const diagnoseProviderStateFailure = async (
     !["founder_admin","meta_reviewer"].includes(row.role) ||
     !row.initiator_owns_workspace
   ) {
-    diagnostics?.emit("meta_oauth_state_rejected",{
+    diagnostics?.emit(stateRejectedEvent,{
       internal_error_code:"meta_state_invalid",stage:"state_validation"
     });
     throw socialError(
@@ -327,7 +328,7 @@ export const completeSocialOAuthFromState = async (
   diagnostics?: MetaOAuthDiagnostics
 ) => {
   if (!state) {
-    diagnostics?.emit("meta_oauth_state_rejected",{
+    diagnostics?.emit(provider === "x" ? "x_oauth_state_rejected" : "meta_oauth_state_rejected",{
       internal_error_code:"meta_state_invalid",stage:"state_validation"
     });
     throw socialError("OAuth state is required", "social_oauth_state_required");

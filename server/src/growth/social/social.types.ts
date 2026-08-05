@@ -56,8 +56,8 @@ export type OAuthTokenResult = {
 };
 
 export type SocialDiscoveredAsset = {
-  provider: "facebook" | "instagram";
-  providerAssetType: "page" | "instagram_professional";
+  provider: "facebook" | "instagram" | "x";
+  providerAssetType: "page" | "instagram_professional" | "account";
   providerAssetId: string;
   providerAssetName: string;
   providerAssetUsername: string | null;
@@ -89,6 +89,7 @@ export type MetaOAuthDiagnosticDetails = {
   instagram_business_account_exists?: boolean;
   x_http_status?: number;
   x_error_category?: string;
+  x_refresh_token_returned?: boolean;
 };
 
 export type MetaProviderDiagnosis =

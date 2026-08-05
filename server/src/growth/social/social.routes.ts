@@ -230,6 +230,7 @@ export const handleXOAuthCallback = async (
       typeof req.query.error === "string" ? req.query.error : undefined,
       undefined,diagnostics
     );
+    diagnostics.emit("x_oauth_callback_redirected",{stage:"completed"});
     return res.redirect(303,buildSocialOAuthRedirect({status:"connected"},"x"));
   } catch (reason) {
     const code=typeof reason === "object" && reason && "code" in reason &&

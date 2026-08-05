@@ -77,7 +77,8 @@ export const exchangeXAuthorizationCode=async (
     throw xError("X token exchange failed","x_token_exchange_failed");
   }
   input.diagnostics?.emit("x_oauth_token_exchange_completed",{
-    stage:"token_exchange",x_http_status:tokenResponse.status
+    stage:"token_exchange",x_http_status:tokenResponse.status,
+    x_refresh_token_returned:typeof token.refresh_token === "string" && Boolean(token.refresh_token)
   });
 
   let identityResponse:Response;
@@ -119,10 +120,15 @@ export const exchangeXAuthorizationCode=async (
     expiresAt:expiresIn ? new Date(Date.now()+expiresIn*1000) : undefined,
     scopes:parseGrantedScopes(token.scope,definition.scopes),
     providerAccountId:user.id.trim(),
-    // The provider-neutral display field holds the public handle required by the card.
-    providerAccountName:`@${user.username.trim().replace(/^@/,"")}`,
+    // The provider-neutral display field holds the public display name.
+    providerAccountName:user.name.trim(),
     providerAccountType:"member",
     discoveredCapabilities:[],
-    discoveredAssets:[]
+    // Store only the authenticated account identity. No post or engagement
+    // endpoint is called, despite X requiring tweet.read for this lookup.
+    discoveredAssets:[{
+      provider:"x",providerAssetType:"account",providerAssetId:user.id.trim(),
+      providerAssetName:user.name.trim(),providerAssetUsername:user.username.trim().replace(/^@/,"")
+    }]
   };
 };

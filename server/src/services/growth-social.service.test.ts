@@ -260,7 +260,7 @@ test("identity activations keep provider permissions isolated", () => {
     "public_profile","pages_show_list","instagram_basic"
   ]);
   assert.deepEqual(getSocialAdapter("x").definition.scopes,[
-    "users.read","offline.access"
+    "tweet.read","users.read","offline.access"
   ]);
   assert.deepEqual(getSocialAdapter("tiktok").definition.scopes,["user.info.basic"]);
 });
@@ -546,7 +546,7 @@ test("OAuth start stores only hashed state and encrypted verifier", async () => 
     assert.equal(url.searchParams.get("client_id"),"client");
     assert.equal(url.searchParams.get("response_type"),"code");
     assert.equal(url.searchParams.get("redirect_uri"),process.env.X_REDIRECT_URI);
-    assert.equal(url.searchParams.get("scope"),"users.read offline.access");
+    assert.equal(url.searchParams.get("scope"),"tweet.read users.read offline.access");
     assert.equal(url.searchParams.get("code_challenge_method"),"S256");
     for (const scope of ["tweet.write","media.write","dm.read","dm.write","follows.write","like.write"]) {
       assert.doesNotMatch(url.searchParams.get("scope") ?? "",new RegExp(scope.replace(".","\\.")));
@@ -557,7 +557,7 @@ test("OAuth start stores only hashed state and encrypted verifier", async () => 
     const verifier=decryptSocialSecret(String(oauthInsert.values[3]));
     assert.equal(url.searchParams.get("code_challenge"),createPkceChallenge(verifier));
     assert.notEqual(url.searchParams.get("code_challenge"),verifier);
-    assert.deepEqual(oauthInsert.values[5],["users.read","offline.access"]);
+    assert.deepEqual(oauthInsert.values[5],["tweet.read","users.read","offline.access"]);
     assert.doesNotMatch(JSON.stringify(queries),/code_challenge_method.*private/i);
   } finally { process.env = previous; }
 });
@@ -1623,7 +1623,7 @@ const withXEnvironment=async (run:() => Promise<void>) => {
 const validXStateBinding=() => ({
   workspace_id:workspaceId,initiated_by:userId,redirect_uri:process.env.X_REDIRECT_URI,
   encrypted_code_verifier:encryptSocialSecret("private-pkce-verifier"),
-  requested_scopes:["users.read","offline.access"]
+  requested_scopes:["tweet.read","users.read","offline.access"]
 });
 
 test("X exchanges with confidential-client PKCE, retrieves the authenticated user and persists encrypted identity tokens", async () => {
@@ -1633,7 +1633,7 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
       requests.push({url:String(input),init});
       if (requests.length === 1) return new Response(JSON.stringify({
         token_type:"bearer",expires_in:7200,access_token:"x-access-token",
-        refresh_token:"x-refresh-token",scope:"users.read offline.access tweet.write"
+        refresh_token:"x-refresh-token",scope:"tweet.read users.read offline.access tweet.write"
       }),{status:200,headers:{"Content-Type":"application/json"}});
       return new Response(JSON.stringify({
         data:{id:"x-user-id",name:"Founder Display Name",username:"founder_handle"}
@@ -1641,8 +1641,8 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     };
     const connection={
       id:"33333333-3333-4333-8333-333333333333",provider:"x",status:"connected",
-      provider_account_name:"@founder_handle",provider_account_type:"member",
-      granted_scopes:["users.read","offline.access"],discovered_capabilities:[]
+      provider_account_name:"Founder Display Name",provider_account_type:"member",
+      granted_scopes:["tweet.read","users.read","offline.access"],discovered_capabilities:[]
     };
     const {db,queries}=stateCallbackDb([validXStateBinding()]);
     const originalQuery=db.query;
@@ -1653,7 +1653,7 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     const result=await completeXOAuthFromState(
       "valid-x-state","private-code",undefined,db as never,diagnostics
     );
-    assert.equal(result.provider_account_name,"@founder_handle");
+    assert.equal(result.provider_account_name,"Founder Display Name");
     assert.equal(requests[0].url,"https://api.x.com/2/oauth2/token");
     assert.equal(requests[0].init?.method,"POST");
     const headers=requests[0].init?.headers as Record<string,string>;
@@ -1671,13 +1671,14 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
       "Bearer x-access-token");
     const insert=queries.find(item => item.sql.includes("INSERT INTO growth_os.social_connections"))!;
     assert.equal(insert.values[2],"x-user-id");
-    assert.equal(insert.values[3],"@founder_handle");
+    assert.equal(insert.values[3],"Founder Display Name");
     assert.equal(decryptSocialSecret(String(insert.values[5])),"x-access-token");
     assert.equal(decryptSocialSecret(String(insert.values[6])),"x-refresh-token");
-    assert.deepEqual(insert.values[8],["users.read","offline.access"]);
+    assert.deepEqual(insert.values[8],["tweet.read","users.read","offline.access"]);
     assert.deepEqual(insert.values[9],[]);
     assert.doesNotMatch(JSON.stringify(queries),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret/);
     assert.ok(diagnosticLines.some(line => /x_oauth_token_exchange_completed/.test(line)));
+    assert.ok(diagnosticLines.some(line => /"x_refresh_token_returned":true/.test(line)));
     assert.ok(diagnosticLines.some(line => /x_oauth_identity_lookup_completed/.test(line)));
     assert.ok(diagnosticLines.some(line => /x_oauth_connection_completed/.test(line)));
     assert.doesNotMatch(diagnosticLines.join(""),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret|Founder Display Name|founder_handle|x-user-id/);
@@ -1754,10 +1755,15 @@ test("X diagnostics allowlist correlation, stages and status without raw provide
     stage:"identity_lookup",x_http_status:403,x_error_category:"forbidden",
     page_name:"private username",page_id:"private X id"
   });
+  diagnostics.emit("x_oauth_token_exchange_completed",{
+    stage:"token_exchange",x_http_status:200,x_refresh_token_returned:true,
+    refresh_token:"private refresh token"
+  } as never);
   diagnostics.emit("unapproved_event",{
     stage:"private stage",x_error_category:"private raw response"
   });
   assert.deepEqual(lines,[
-    '{"event":"x_oauth_identity_lookup_failed","correlation_id":"safe-correlation","provider":"x","stage":"identity_lookup","x_http_status":403,"x_error_category":"forbidden"}'
+    '{"event":"x_oauth_identity_lookup_failed","correlation_id":"safe-correlation","provider":"x","stage":"identity_lookup","x_http_status":403,"x_error_category":"forbidden"}',
+    '{"event":"x_oauth_token_exchange_completed","correlation_id":"safe-correlation","provider":"x","stage":"token_exchange","x_http_status":200,"x_refresh_token_returned":true}'
   ]);
 });

@@ -60,11 +60,13 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     applicationName: "X OAuth 2.0 application",
     authorizationUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
-    scopes: ["users.read","offline.access"],
+    // X requires tweet.read alongside users.read for GET /2/users/me. Funnel OS
+    // does not request posts, timelines, likes or analytics in this phase.
+    scopes: ["tweet.read","users.read","offline.access"],
     capabilities: [],
     requiredEnvironment: ["X_CLIENT_ID","X_CLIENT_SECRET","X_REDIRECT_URI"],
     supportsPkce: true,
-    externalReview: ["Enable OAuth 2.0 Authorization Code Flow with PKCE for identity lookup only."]
+    externalReview: ["Enable OAuth 2.0 Authorization Code Flow with PKCE for identity lookup only. tweet.read is required by X for authenticated-user lookup; Funnel OS does not retrieve or store posts."]
   },
   tiktok: {
     id: "tiktok", name: "TikTok",

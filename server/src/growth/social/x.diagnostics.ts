@@ -2,12 +2,13 @@ import crypto from "crypto";
 import { MetaOAuthDiagnostics } from "./social.types";
 
 const EVENTS=new Set([
-  "x_oauth_callback_received","x_oauth_state_validated",
+  "x_oauth_callback_received","x_oauth_state_validated","x_oauth_state_rejected",
   "x_oauth_token_exchange_started","x_oauth_token_exchange_completed",
   "x_oauth_token_exchange_failed","x_oauth_identity_lookup_started",
   "x_oauth_identity_lookup_completed","x_oauth_identity_lookup_failed",
   "x_oauth_connection_persistence_started","x_oauth_connection_completed",
-  "x_oauth_connection_persistence_failed","x_oauth_callback_redirected_with_error"
+  "x_oauth_connection_persistence_failed","x_oauth_callback_redirected",
+  "x_oauth_callback_redirected_with_error"
 ]);
 
 export const createXOAuthDiagnostics=(
@@ -22,6 +23,7 @@ export const createXOAuthDiagnostics=(
     if (Number.isInteger(details.x_http_status)) payload.x_http_status=details.x_http_status;
     if (details.x_error_category) payload.x_error_category=details.x_error_category;
     if (details.database_error_category) payload.database_error_category=details.database_error_category;
+    if (typeof details.x_refresh_token_returned === "boolean") payload.x_refresh_token_returned=details.x_refresh_token_returned;
     const line=JSON.stringify(payload);
     if (sink) sink(line);
     else if (/(?:failed|error)$/.test(event)) console.warn(line);
