@@ -126,9 +126,6 @@ export const exchangeXAuthorizationCode=async (
     discoveredCapabilities:[],
     // Store only the authenticated account identity. No post or engagement
     // endpoint is called, despite X requiring tweet.read for this lookup.
-    discoveredAssets:[{
-      provider:"x",providerAssetType:"account",providerAssetId:user.id.trim(),
-      providerAssetName:user.name.trim(),providerAssetUsername:user.username.trim().replace(/^@/,"")
-    }]
+    discoveredAssets:[]
   };
 };
