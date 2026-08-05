@@ -12,7 +12,7 @@ import {
   exchangeMetaAuthorizationCode
 } from "./meta.adapter";
 import { getFacebookBusinessConfigurationStatus } from "./meta.diagnostics";
-
+import { exchangeSnapchatAuthorizationCode } from "./snapchat.adapter";
 const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   linkedin: {
     id: "linkedin", name: "LinkedIn",
@@ -84,16 +84,26 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     ]
   },
   snapchat: {
-    id: "snapchat", name: "Snapchat",
-    developerAccount: "Snap Developer account",
-    applicationName: "Snap Kit application",
-    authorizationUrl: null, tokenUrl: null, scopes: [],
-    capabilities: ["images","video","stories","metrics"],
-    requiredEnvironment: [],
-    supportsPkce: true,
-    externalReview: ["Provider adapter is reserved for a future approved Snap integration."],
-    futureReady: true
-  }
+  id: "snapchat",
+  name: "Snapchat",
+  developerAccount: "Snap Developer account",
+  applicationName: "Snap Kit application with Login Kit",
+  authorizationUrl: "https://accounts.snapchat.com/accounts/oauth2/auth",
+  tokenUrl: "https://accounts.snapchat.com/accounts/oauth2/token",
+  scopes: [
+    "https://auth.snapchat.com/oauth2/api/user.external_id",
+    "https://auth.snapchat.com/oauth2/api/user.display_name"
+  ],
+  capabilities: [],
+  requiredEnvironment: [
+    "SNAPCHAT_CLIENT_ID",
+    "SNAPCHAT_CLIENT_SECRET",
+    "SNAPCHAT_REDIRECT_URI"
+  ],
+  supportsPkce: true,
+  externalReview: [
+    "Enable Login Kit and activate the configured app version on Staging. Production access requires Snap approval."
+  ]
 };
 
 const providerEnv = (provider: SocialProvider) => {
@@ -120,6 +130,11 @@ const providerEnv = (provider: SocialProvider) => {
     clientSecret: process.env.TIKTOK_CLIENT_SECRET,
     redirectUri: process.env.TIKTOK_REDIRECT_URI
   };
+  if (provider === "snapchat") return {
+  clientId: process.env.SNAPCHAT_CLIENT_ID,
+  clientSecret: process.env.SNAPCHAT_CLIENT_SECRET,
+  redirectUri: process.env.SNAPCHAT_REDIRECT_URI
+};
   return {};
 };
 
@@ -171,6 +186,9 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     }
     if (definition.id === "x") {
       return exchangeXAuthorizationCode(definition,providerEnv(definition.id),input);
+    }
+    if (definition.id === "snapchat") {
+      return exchangeSnapchatAuthorizationCode(definition,providerEnv(definition.id),input);
     }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
@@ -229,3 +247,4 @@ export const getSocialStartupStatus = () => SOCIAL_PROVIDERS.map(provider => ({
   provider,
   ...validateSocialEnvironment(provider)
 })); 
+

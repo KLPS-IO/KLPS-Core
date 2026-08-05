@@ -72,7 +72,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
-    const providerActivated = ["linkedin","facebook","tiktok","x"].includes(definition.id) && environment.available;
+    const providerActivated = ["linkedin","facebook","tiktok","x","snapchat"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
       name: definition.name,
