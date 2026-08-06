@@ -10,11 +10,12 @@ import {
   completeTikTokOAuthFromState,
   completeXOAuthFromState,
   completeSocialOAuth,
+  completeSnapchatOAuthFromState,
   createPublishJob,
   disconnectSocialProvider,
   getSocialProviderOverview,
   schedulePublishJob,
-  upsertSocialContentVariant
+  upsertSocialContentVariant,
 } from "./social.service";
 import { SocialProvider } from "./social.types";
 import { createMetaOAuthDiagnostics } from "./meta.diagnostics";
@@ -62,7 +63,11 @@ const SOCIAL_FAILURE_CODES = {
   x_oauth_not_configured:"connection_failed",
   x_connection_persistence_failed:"connection_failed",
   social_oauth_binding_invalid:"connection_failed",
-  social_oauth_callback_failed:"connection_failed"
+  social_oauth_callback_failed:"connection_failed",
+  snapchat_oauth_not_configured: "connection_failed",
+  snapchat_token_exchange_failed: "provider_exchange_failed",
+  snapchat_identity_lookup_failed: "identity_lookup_failed",
+  snapchat_connection_persistence_failed: "connection_failed",
 } as const;
 
 const META_INTERNAL_ERROR_CODES:Record<string,string> = {
@@ -102,7 +107,7 @@ const socialFrontendBase = () => {
 
 export const buildSocialOAuthRedirect = (
   result: { status:"connected" } | { status:"failed"; code:string },
-  provider: "linkedin" | "facebook" | "tiktok" | "x" = "linkedin"
+  provider: "linkedin" | "facebook" | "tiktok" | "x" | "snapchat" = "linkedin"
 ) => {
   const url = socialFrontendBase();
   url.search = "";
@@ -133,6 +138,7 @@ type LinkedInCallbackCompleter = typeof completeLinkedInOAuthFromState;
 type MetaCallbackCompleter = typeof completeMetaOAuthFromState;
 type TikTokCallbackCompleter = typeof completeTikTokOAuthFromState;
 type XCallbackCompleter = typeof completeXOAuthFromState;
+type SnapchatCallbackCompleter = typeof completeSnapchatOAuthFromState;
 
 export const handleLinkedInOAuthCallback = async (
   req: express.Request,
@@ -245,6 +251,56 @@ export const handleXOAuthCallback = async (
   }
 };
 
+export const handleSnapchatOAuthCallback = async (
+  req: express.Request,
+  res: express.Response,
+  complete: SnapchatCallbackCompleter =
+    completeSnapchatOAuthFromState
+) => {
+  try {
+    await complete(
+      String(req.query.state ?? ""),
+      String(req.query.code ?? ""),
+      typeof req.query.error === "string"
+        ? req.query.error
+        : undefined
+    );
+
+    return res.redirect(
+      303,
+      buildSocialOAuthRedirect(
+        { status: "connected" },
+        "snapchat"
+      )
+    );
+  } catch (reason) {
+    const code =
+      typeof reason === "object" &&
+      reason &&
+      "code" in reason &&
+      typeof reason.code === "string"
+        ? reason.code
+        : "social_oauth_callback_failed";
+
+    console.warn(JSON.stringify({
+      event: "growth_social_oauth_callback_failed",
+      provider: "snapchat",
+      reason:
+        SOCIAL_FAILURE_CODES[
+          code as keyof typeof SOCIAL_FAILURE_CODES
+        ] ?? "connection_failed"
+    }));
+
+    return res.redirect(
+      303,
+      buildSocialOAuthRedirect(
+        { status: "failed", code },
+        "snapchat"
+      )
+    );
+  }
+};
+
 socialOAuthCallbackRoutes.get(
   "/oauth/linkedin/callback",
   (req,res,next) => handleLinkedInOAuthCallback(req,res).catch(next)
@@ -263,6 +319,12 @@ socialOAuthCallbackRoutes.get(
 socialOAuthCallbackRoutes.get(
   "/oauth/x/callback",
   (req,res,next) => handleXOAuthCallback(req,res).catch(next)
+);
+
+socialOAuthCallbackRoutes.get(
+  "/oauth/snapchat/callback",
+  (req, res, next) =>
+    handleSnapchatOAuthCallback(req, res).catch(next)
 );
 
 router.get("/providers", asyncHandler(async (req,res) => {
