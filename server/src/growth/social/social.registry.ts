@@ -101,9 +101,10 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     "SNAPCHAT_REDIRECT_URI"
   ],
   supportsPkce: true,
-  externalReview: [
+    externalReview: [
     "Enable Login Kit and activate the configured app version on Staging. Production access requires Snap approval."
   ]
+  }
 };
 
 const providerEnv = (provider: SocialProvider) => {
@@ -237,7 +238,7 @@ export const validateSocialEnvironment = (provider: SocialProvider) => {
         ? "Facebook Login for Business configuration is malformed"
       : missing.length || encryptionMissing
         ? "Developer application configuration is incomplete"
-        : provider === "linkedin" || provider === "facebook" || provider === "tiktok" || provider === "x"
+        : provider === "linkedin" || provider === "facebook" || provider === "tiktok" || provider === "x" || provider === "snapchat"
           ? "OAuth connection is configured"
           : "OAuth can be initiated; provider token exchange remains activation-gated"
   };

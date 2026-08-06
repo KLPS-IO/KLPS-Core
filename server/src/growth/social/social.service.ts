@@ -389,14 +389,34 @@ export const completeTikTokOAuthFromState = (
   providerError?: string,
   db: Db = pool
 ) => completeSocialOAuthFromState("tiktok",state,code,providerError,db);
-
 export const completeXOAuthFromState = (
-  state:string,
-  code:string,
-  providerError?:string,
-  db:Db=pool,
-  diagnostics?:MetaOAuthDiagnostics
-) => completeSocialOAuthFromState("x",state,code,providerError,db,diagnostics);
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool,
+  diagnostics?: MetaOAuthDiagnostics
+) => completeSocialOAuthFromState(
+  "x",
+  state,
+  code,
+  providerError,
+  db,
+  diagnostics
+);
+
+
+export const completeSnapchatOAuthFromState = (
+  state: string,
+  code: string,
+  providerError?: string,
+  db: Db = pool
+) => completeSocialOAuthFromState(
+  "snapchat",
+  state,
+  code,
+  providerError,
+  db
+);
 
 const completeSocialOAuthForAuthorisation = async (
   row: OAuthAuthorisationRow,
@@ -546,7 +566,7 @@ const completeSocialOAuthForAuthorisation = async (
     }
   } catch (reason) {
     const errorCode = typeof reason === "object" && reason && "code" in reason &&
-      typeof reason.code === "string" && /^(?:linkedin|meta|tiktok|x)_[a-z_]+$/.test(reason.code)
+      typeof reason.code === "string" && /^(?:linkedin|meta|tiktok|x|snapchat)_[a-z_]+$/.test(reason.code)
       ? reason.code
       : "social_oauth_callback_failed";
     await db.query(`
