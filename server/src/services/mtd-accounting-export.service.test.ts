@@ -44,6 +44,11 @@ test("pending VAT, missing VAT, nominal mapping and foreign conversion are block
   assert.ok(validateExpenseForQuickFile({...valid,category:"Unknown"},config).reasons.includes("purchase_nominal_code_missing"));
   assert.ok(validateExpenseForQuickFile({...valid,currency:"EUR",exchange_rate:null},config).reasons.includes("foreign_currency_conversion_unresolved"));
 });
+test("advisory provenance warnings do not block accounting export validation",()=>{
+  const config={categoryNominalCodes:{Software:"7506"},paymentAccountNominalCodes:{founder_director_funded:"1201"},source:"database",confirmed:true,version:1} as never;
+  const result=validateExpenseForQuickFile({...valid,warnings:["supplier_country_missing","payment_evidence_missing"]},config);
+  assert.deepEqual(result.reasons,[]);
+});
 
 test("founder-funded paid purchases require their reviewed account mapping",()=>{
   assert.equal(validateExpenseForQuickFile(valid,config).row!.values["Paid account nominal code"],"3100");

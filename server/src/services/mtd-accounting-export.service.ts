@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
-import { getVatLedger, listVatPeriods } from "./finance-vat.service";
+import { getVatLedger, listVatPeriods, vatWarningSeverity } from "./finance-vat.service";
 import {
   ExportConfig,
   loadEnvironmentExportConfig,
@@ -63,7 +63,7 @@ export const validateExpenseForQuickFile=(row:Json,config:ExportConfig):{reasons
   if(currency!=="GBP"&&!(Number(row.exchange_rate)>0&&present(row.gbp_gross_amount)))reasons.push("foreign_currency_conversion_unresolved");
   const warnings=Array.isArray(row.warnings)?row.warnings.map(String):[];
   if(!Array.isArray(row.evidence_files)||row.evidence_files.length===0)reasons.push("evidence_requirement_unsatisfied");
-  for(const warning of warnings)if(!["payment_evidence_missing"].includes(warning)||paidDate)reasons.push(`critical_warning:${warning}`);
+  for(const warning of warnings)if(vatWarningSeverity(warning)!=="advisory"||warning==="possible_duplicate")reasons.push(`critical_warning:${warning}`);
   if(reasons.length)return{reasons:[...new Set(reasons)],row:null,nominal,paymentCode};
   const rate=Number(row.vat_rate)<=1?Number(row.vat_rate)*100:Number(row.vat_rate);
   return{reasons:[],nominal,paymentCode,row:{expense_id:clean(row.id),values:{

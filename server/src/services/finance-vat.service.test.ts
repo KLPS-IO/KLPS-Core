@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { createHistoricalExpense,expenseWarnings,getVatLedger,normalizeVatLedgerRow,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense } from "./finance-vat.service";
+import { createHistoricalExpense,expenseWarnings,getVatLedger,normalizeVatLedgerRow,reviewCompletionIssues,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense,vatWarningSeverity } from "./finance-vat.service";
 
 const user="22222222-2222-4222-8222-222222222222";
 test("VAT Phase 1A migration is additive and seeds periods but no expenses",()=>{
@@ -99,14 +99,43 @@ test("VAT ledger response contract handles empty, complete, partial, missing-evi
   assert.deepEqual(rows[1].evidence_files,[]);
   assert.deepEqual(rows[1].adjustments,[]);
   assert.deepEqual(rows[2].adjustments,[{id:"refund",evidence_files:[]}]);
+  assert.equal((rows[0].warning_details as Array<{code:string;severity:string}>).find(item=>item.code==="payment_evidence_missing")?.severity,"advisory");
   assert.ok((rows[3].warnings as string[]).includes("possible_duplicate"));
   assert.ok((rows[4].warnings as string[]).includes("possible_duplicate"));
 });
-test("warnings preserve save but review complete is blocked",async()=>{
+test("critical warnings preserve save but block review complete with structured details",async()=>{
   assert.deepEqual(expenseWarnings({gbp_net_amount:"10",gbp_vat_amount:"2",gbp_gross_amount:"11",currency:"USD"}),["gross_net_vat_mismatch","foreign_currency_without_conversion","pending_vat_treatment","supplier_country_missing"]);
   let queries=0;const db={query:async()=>{queries++;return{rows:[{gbp_net_amount:"10",gbp_vat_amount:"2",gbp_gross_amount:"11"}]};}};
-  await assert.rejects(updateHistoricalExpense("11111111-1111-4111-8111-111111111111",{vat_review_status:"review_complete",change_reason:"review"},user,db as never),/Critical warnings/);
+  await assert.rejects(updateHistoricalExpense("11111111-1111-4111-8111-111111111111",{vat_review_status:"review_complete",change_reason:"review"},user,db as never),(error:unknown)=>{
+    const typed=error as {code?:string;statusCode?:number;message?:string;details?:{issues?:Array<{code:string;message:string}>}};
+    assert.equal(typed.code,"vat_review_blocked");assert.equal(typed.statusCode,409);assert.equal(typed.message,"Cannot mark VAT review complete");
+    assert.ok(typed.details?.issues?.some(issue=>issue.code==="gross_net_vat_mismatch"));
+    assert.ok(typed.details?.issues?.some(issue=>issue.code==="pending_vat_treatment"));return true;
+  });
   assert.equal(queries,1,"blocked review must not reach UPDATE");
+});
+test("Arduino GBP invoice can complete review while supplier country and payment evidence remain advisory",async()=>{
+  const existing={id:"30b4d61f-73cd-44d8-bdd9-a6d200a6976c",supplier_name:"Arduino S.r.l. / Amazon marketplace",transaction_date:"2025-09-09",invoice_date:"2025-09-09",currency:"GBP",gross_amount:"37.84",gbp_gross_amount:"37.84",vat_period_id:"e0cfef41-7c79-4715-8ac9-02f530b8f48a",supplier_country:null};
+  const patch={gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",exchange_rate:"1",vat_treatment:"standard_rated",vat_review_status:"review_complete",change_reason:"Founder edited VAT ledger record"};
+  assert.deepEqual(expenseWarnings({...existing,...patch}),["supplier_country_missing"]);
+  assert.deepEqual(reviewCompletionIssues({...existing,...patch}),[]);
+  assert.equal(vatWarningSeverity("supplier_country_missing"),"advisory");
+  assert.equal(vatWarningSeverity("payment_evidence_missing"),"advisory");
+  let query=0;const db={query:async()=>({rows:[query++===0?existing:{...existing,...patch}]})};
+  const saved=await updateHistoricalExpense(existing.id,patch,user,db as never);
+  assert.equal(saved.vat_review_status,"review_complete");assert.equal(query,2);
+});
+test("GBP review accepts an omitted exchange rate or rate one but retains genuine accounting blockers",()=>{
+  const base={currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",vat_treatment:"standard_rated",vat_period_id:"period"};
+  assert.deepEqual(reviewCompletionIssues(base),[]);
+  assert.deepEqual(reviewCompletionIssues({...base,exchange_rate:"1"}),[]);
+  assert.deepEqual(reviewCompletionIssues({...base,gbp_vat_amount:null}).map(issue=>issue.code),["vat_amount_missing"]);
+  assert.deepEqual(reviewCompletionIssues({...base,gbp_gross_amount:"37.83"}).map(issue=>issue.code),["gross_net_vat_mismatch"]);
+  assert.deepEqual(reviewCompletionIssues({...base,vat_rate:null}).map(issue=>issue.code),["vat_rate_missing"]);
+  assert.deepEqual(reviewCompletionIssues({...base,vat_period_id:null}).map(issue=>issue.code),["vat_period_unconfirmed"]);
+});
+test("null monetary fields do not fabricate a gross/net/VAT mismatch",()=>{
+  assert.ok(!expenseWarnings({currency:"GBP",net_amount:null,vat_amount:null,gross_amount:"37.84",vat_treatment:"standard_rated"}).includes("gross_net_vat_mismatch"));
 });
 test("pending VAT treatment warns until a controlled treatment is selected",()=>{
   assert.ok(expenseWarnings({currency:"GBP",vat_treatment:null,supplier_country:"GB"}).includes("pending_vat_treatment"));
@@ -137,4 +166,5 @@ test("VAT API remains additive and preserves existing routes and working-paper l
   assert.match(routes,/router\.post\("\/expenses"/);
   assert.match(routes,/VAT working paper – not an HMRC submission/);
   assert.match(routes,/router\.get\(\s*"\/state"/);
+  assert.match(routes,/error\.details === undefined[\s\S]*details: error\.details/);
 });

@@ -1314,6 +1314,7 @@ router.use(
     error: Error & {
       statusCode?: number;
       code?: string;
+      details?: unknown;
     },
     _req: express.Request,
     res: express.Response,
@@ -1333,7 +1334,8 @@ router.use(
     return res.status(error.statusCode).json({
       status: "error",
       code: error.code ?? "finance_error",
-      message: error.message
+      message: error.message,
+      ...(error.details === undefined ? {} : { details: error.details })
     });
   }
 );
