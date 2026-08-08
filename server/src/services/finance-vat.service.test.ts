@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { createHistoricalExpense,expenseWarnings,getVatLedger,normalizeVatLedgerRow,reviewCompletionIssues,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense,vatWarningSeverity } from "./finance-vat.service";
+import { createHistoricalExpense,expenseWarnings,getVatLedger,normalizeVatLedgerRow,reviewCompletionIssues,reviewReadinessIssues,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense,vatWarningSeverity } from "./finance-vat.service";
 
 const user="22222222-2222-4222-8222-222222222222";
 test("VAT Phase 1A migration is additive and seeds periods but no expenses",()=>{
@@ -115,15 +115,30 @@ test("critical warnings preserve save but block review complete with structured 
   assert.equal(queries,1,"blocked review must not reach UPDATE");
 });
 test("Arduino GBP invoice can complete review while supplier country and payment evidence remain advisory",async()=>{
-  const existing={id:"30b4d61f-73cd-44d8-bdd9-a6d200a6976c",supplier_name:"Arduino S.r.l. / Amazon marketplace",transaction_date:"2025-09-09",invoice_date:"2025-09-09",currency:"GBP",gross_amount:"37.84",gbp_gross_amount:"37.84",vat_period_id:"e0cfef41-7c79-4715-8ac9-02f530b8f48a",supplier_country:null};
+  const existing={id:"30b4d61f-73cd-44d8-bdd9-a6d200a6976c",supplier_name:"Arduino S.r.l. / Amazon marketplace",transaction_date:"2025-09-09",invoice_date:"2025-09-09",currency:"GBP",gross_amount:"37.84",gbp_gross_amount:"37.84",vat_period_id:"e0cfef41-7c79-4715-8ac9-02f530b8f48a",supplier_country:null,vat_review_status:"ready_for_review",evidence_files:[{type:"full_vat_invoice",document_status:"Active",verification_status:"Unknown"}]};
   const patch={gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",exchange_rate:"1",vat_treatment:"standard_rated",vat_review_status:"review_complete",change_reason:"Founder edited VAT ledger record"};
   assert.deepEqual(expenseWarnings({...existing,...patch}),["supplier_country_missing"]);
   assert.deepEqual(reviewCompletionIssues({...existing,...patch}),[]);
+  assert.deepEqual(reviewReadinessIssues({...existing,...patch}),[]);
   assert.equal(vatWarningSeverity("supplier_country_missing"),"advisory");
   assert.equal(vatWarningSeverity("payment_evidence_missing"),"advisory");
   let query=0;const db={query:async()=>({rows:[query++===0?existing:{...existing,...patch}]})};
   const saved=await updateHistoricalExpense(existing.id,patch,user,db as never);
   assert.equal(saved.vat_review_status,"review_complete");assert.equal(query,2);
+});
+test("VAT review lifecycle validates ready and requires ready before complete",async()=>{
+  const id="11111111-1111-4111-8111-111111111111";
+  const complete={id,currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",vat_treatment:"standard_rated",vat_period_id:"period",evidence_files:[{type:"full_vat_invoice",document_status:"Active"}]};
+  let queries=0;const readyDb={query:async()=>({rows:[queries++===0?{...complete,vat_review_status:"in_review"}:{...complete,vat_review_status:"ready_for_review"}]})};
+  assert.equal((await updateHistoricalExpense(id,{vat_review_status:"ready_for_review",change_reason:"Ready"},user,readyDb as never)).vat_review_status,"ready_for_review");
+  const notReadyDb={query:async()=>({rows:[{...complete,vat_review_status:"in_review"}]})};
+  await assert.rejects(updateHistoricalExpense(id,{vat_review_status:"review_complete",change_reason:"Complete"},user,notReadyDb as never),(error:unknown)=>Boolean((error as {details?:{issues?:Array<{code:string}>}}).details?.issues?.some(issue=>issue.code==="review_not_ready")));
+  let completeQueries=0;const completeDb={query:async()=>({rows:[completeQueries++===0?{...complete,vat_review_status:"ready_for_review"}:{...complete,vat_review_status:"review_complete"}]})};
+  assert.equal((await updateHistoricalExpense(id,{vat_review_status:"review_complete",change_reason:"Complete"},user,completeDb as never)).vat_review_status,"review_complete");
+});
+test("production Arduino ready state returns the exact structured VAT-rate blocker",()=>{
+  const issues=reviewReadinessIssues({currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:null,exchange_rate:"1.00000000",vat_treatment:"standard_rated",vat_period_id:"e0cfef41-7c79-4715-8ac9-02f530b8f48a",supplier_country:null,evidence_files:[{type:"full_vat_invoice",document_status:"Active",verification_status:"Unknown"}]});
+  assert.deepEqual(issues,[{code:"vat_rate_missing",severity:"critical",message:"VAT rate is required for this VAT treatment."}]);
 });
 test("GBP review accepts an omitted exchange rate or rate one but retains genuine accounting blockers",()=>{
   const base={currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",vat_treatment:"standard_rated",vat_period_id:"period"};

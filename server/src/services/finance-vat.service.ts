@@ -91,10 +91,11 @@ const warningMessages:Record<string,string>={
   vat_invoice_review_pending:"VAT invoice evidence has not been verified.",
   payment_evidence_missing:"Payment evidence is not linked.",
   possible_duplicate:"Possible historical duplicate; confirm before export.",
+  review_not_ready:"Move the transaction to Ready for review before completing it.",
 };
 export const vatWarningSeverity=(code:string):VatWarningSeverity=>
   ["gross_net_vat_mismatch","foreign_currency_without_conversion","pending_vat_treatment","reverse_charge_review_required","vat_net_amount_missing","vat_amount_missing","vat_gross_amount_missing","vat_rate_missing","vat_period_unconfirmed"].includes(code)?"critical":
-    ["supplier_vat_number_missing","personal_mixed_use_review_required","no_supplier_invoice","vat_invoice_review_pending","vat_period_conflict"].includes(code)?"review_required":"advisory";
+    ["supplier_vat_number_missing","personal_mixed_use_review_required","no_supplier_invoice","vat_invoice_review_pending","vat_period_conflict","review_not_ready"].includes(code)?"review_required":"advisory";
 const validationIssue=(code:string):VatValidationIssue=>({code,severity:vatWarningSeverity(code),message:warningMessages[code]??code.replace(/_/g," ")});
 export const reviewCompletionIssues=(row:Input):VatValidationIssue[]=>{
   const codes=expenseWarnings(row).filter(code=>vatWarningSeverity(code)==="critical");
@@ -108,6 +109,13 @@ export const reviewCompletionIssues=(row:Input):VatValidationIssue[]=>{
   if(requiresVatAmounts&&!present(row.vat_rate))codes.push("vat_rate_missing");
   if(!text(row.vat_period_id))codes.push("vat_period_unconfirmed");
   return [...new Set(codes)].map(validationIssue);
+};
+export const reviewReadinessIssues=(row:Input):VatValidationIssue[]=>{
+  const issues=reviewCompletionIssues(row),treatment=text(row.vat_treatment);
+  const files=objectArray(row.evidence_files).filter(file=>file.document_status===undefined||file.document_status==="Active");
+  const needsVatInvoice=treatment==="standard_rated"||treatment==="reduced_rated"||Number(row.recoverable_vat_amount)>0;
+  if(needsVatInvoice&&!files.some(file=>["full_vat_invoice","simplified_vat_invoice"].includes(String(file.type??file.vat_evidence_type??""))))issues.push(validationIssue("no_supplier_invoice"));
+  return issues;
 };
 
 const expenseValues=(input:Input,partial=false)=>{
@@ -152,11 +160,12 @@ export const updateHistoricalExpense=async(id:string,input:Input,userId:string,d
   const value=expenseValues(input,true);const fields=Object.keys(value);if(!fields.length)throw vatError("No expense fields supplied");
   const reason=text(input.change_reason);if(!reason)throw vatError("change_reason is required");
   const expenseId=uuid(id);
-  if(value.vat_review_status==="review_complete"){
-    const existing=(await db.query("SELECT * FROM finance_os.expenses WHERE id=$1",[expenseId])).rows[0];
+  if(value.vat_review_status==="ready_for_review"||value.vat_review_status==="review_complete"){
+    const existing=(await db.query(`SELECT e.*,COALESCE((SELECT jsonb_agg(jsonb_build_object('type',ev.vat_evidence_type,'verification_status',ev.verification_status,'document_status',ev.document_status)) FROM finance_os.evidence_links l JOIN finance_os.evidence ev ON ev.id=l.evidence_id WHERE l.entity_type='expense' AND l.entity_id=e.id),'[]'::jsonb) evidence_files FROM finance_os.expenses e WHERE e.id=$1`,[expenseId])).rows[0];
     if(!existing)throw vatError("Expense not found","expense_not_found",404);
-    const issues=reviewCompletionIssues({...existing,...value});
-    if(issues.length)throw vatError("Cannot mark VAT review complete","vat_review_blocked",409,{issues});
+    const issues=reviewReadinessIssues({...existing,...value});
+    if(value.vat_review_status==="review_complete"&&!["ready_for_review","review_complete"].includes(String(existing.vat_review_status??"")))issues.unshift(validationIssue("review_not_ready"));
+    if(issues.length)throw vatError(value.vat_review_status==="review_complete"?"Cannot mark VAT review complete":"Cannot mark VAT review ready","vat_review_blocked",409,{issues});
   }
   const params=fields.map(f=>value[f]);
   const result=await db.query(`UPDATE finance_os.expenses SET ${fields.map((f,i)=>`${f}=$${i+1}`).join(",")},updated_by=$${fields.length+1},change_reason=$${fields.length+2} WHERE id=$${fields.length+3} RETURNING *`,[...params,userId,reason,expenseId]);
@@ -202,6 +211,7 @@ export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
     const warnings=expenseWarnings(row);
     if(resolution.vat_period_source==="conflict")warnings.push("vat_period_conflict");
     if(!supplier)warnings.push("no_supplier_invoice");if(!payment)warnings.push("payment_evidence_missing");
+    for(const issue of reviewCompletionIssues(row))if(!warnings.includes(issue.code))warnings.push(issue.code);
     const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");if((duplicateKeys.get(key)??0)>1)warnings.push("possible_duplicate");
     const effectivePeriod=periods.find(period=>period.id===resolution.effective_vat_period_id);
     return normalizeVatLedgerRow({...row,...resolution,vat_period_start:effectivePeriod?.start_date??null,vat_period_end:effectivePeriod?.end_date??null,evidence_coverage:coverage,warnings,warning_details:warnings.map(validationIssue)});
