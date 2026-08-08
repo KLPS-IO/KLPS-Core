@@ -116,7 +116,7 @@ test("critical warnings preserve save but block review complete with structured 
 });
 test("Arduino GBP invoice can complete review while supplier country and payment evidence remain advisory",async()=>{
   const existing={id:"30b4d61f-73cd-44d8-bdd9-a6d200a6976c",supplier_name:"Arduino S.r.l. / Amazon marketplace",transaction_date:"2025-09-09",invoice_date:"2025-09-09",currency:"GBP",gross_amount:"37.84",gbp_gross_amount:"37.84",vat_period_id:"e0cfef41-7c79-4715-8ac9-02f530b8f48a",supplier_country:null,vat_review_status:"ready_for_review",evidence_files:[{type:"full_vat_invoice",document_status:"Active",verification_status:"Unknown"}]};
-  const patch={gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",exchange_rate:"1",vat_treatment:"standard_rated",vat_review_status:"review_complete",change_reason:"Founder edited VAT ledger record"};
+  const patch={gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"0.20",exchange_rate:"1",vat_treatment:"standard_rated",vat_review_status:"review_complete",change_reason:"Founder edited VAT ledger record"};
   assert.deepEqual(expenseWarnings({...existing,...patch}),["supplier_country_missing"]);
   assert.deepEqual(reviewCompletionIssues({...existing,...patch}),[]);
   assert.deepEqual(reviewReadinessIssues({...existing,...patch}),[]);
@@ -128,7 +128,7 @@ test("Arduino GBP invoice can complete review while supplier country and payment
 });
 test("VAT review lifecycle validates ready and requires ready before complete",async()=>{
   const id="11111111-1111-4111-8111-111111111111";
-  const complete={id,currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",vat_treatment:"standard_rated",vat_period_id:"period",evidence_files:[{type:"full_vat_invoice",document_status:"Active"}]};
+  const complete={id,currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"0.20",vat_treatment:"standard_rated",vat_period_id:"period",evidence_files:[{type:"full_vat_invoice",document_status:"Active"}]};
   let queries=0;const readyDb={query:async()=>({rows:[queries++===0?{...complete,vat_review_status:"in_review"}:{...complete,vat_review_status:"ready_for_review"}]})};
   assert.equal((await updateHistoricalExpense(id,{vat_review_status:"ready_for_review",change_reason:"Ready"},user,readyDb as never)).vat_review_status,"ready_for_review");
   const notReadyDb={query:async()=>({rows:[{...complete,vat_review_status:"in_review"}]})};
@@ -141,7 +141,7 @@ test("production Arduino ready state returns the exact structured VAT-rate block
   assert.deepEqual(issues,[{code:"vat_rate_missing",severity:"critical",message:"VAT rate is required for this VAT treatment."}]);
 });
 test("GBP review accepts an omitted exchange rate or rate one but retains genuine accounting blockers",()=>{
-  const base={currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"20",vat_treatment:"standard_rated",vat_period_id:"period"};
+  const base={currency:"GBP",gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"0.20",vat_treatment:"standard_rated",vat_period_id:"period"};
   assert.deepEqual(reviewCompletionIssues(base),[]);
   assert.deepEqual(reviewCompletionIssues({...base,exchange_rate:"1"}),[]);
   assert.deepEqual(reviewCompletionIssues({...base,gbp_vat_amount:null}).map(issue=>issue.code),["vat_amount_missing"]);
@@ -173,6 +173,7 @@ test("negative monetary values and invalid treatment are rejected",async()=>{
   const db={query:async()=>({rows:[]})};
   await assert.rejects(createHistoricalExpense({payment_date:"2025-05-08",supplier_name:"Supplier",gross_amount:"-1"},user,db as never));
   await assert.rejects(updateHistoricalExpense("11111111-1111-4111-8111-111111111111",{vat_treatment:"automatic_decision",change_reason:"x"},user,db as never));
+  await assert.rejects(updateHistoricalExpense("11111111-1111-4111-8111-111111111111",{vat_rate:"20",change_reason:"x"},user,db as never),(error:unknown)=>(error as {code?:string}).code==="invalid_vat_rate");
 });
 test("VAT API remains additive and preserves existing routes and working-paper label",()=>{
   const routes=readFileSync("server/src/routes/finance.routes.ts","utf8");

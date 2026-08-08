@@ -14,6 +14,7 @@ const vatError=(message:string,code="invalid_vat_expense",statusCode=400,details
 const text=(v:unknown)=>typeof v==="string"&&v.trim()?v.trim():null;
 const date=(v:unknown)=>{const x=text(v);if(!x)return null;if(!/^\d{4}-\d{2}-\d{2}$/.test(x)||Number.isNaN(Date.parse(`${x}T00:00:00Z`)))throw vatError("Invalid date");return x;};
 const decimal=(v:unknown)=>{if(v===null||v===undefined||v==="")return null;const x=String(v);if(!/^\d+(\.\d{1,8})?$/.test(x))throw vatError("Invalid non-negative decimal");return x;};
+const vatRate=(v:unknown)=>{const x=decimal(v);if(x!==null&&Number(x)>1)throw vatError("VAT rate must use a decimal fraction between 0 and 1 (for example 0.20 for 20%).","invalid_vat_rate");return x;};
 const bool=(v:unknown)=>typeof v==="boolean"?v:null;
 const uuid=(v:unknown)=>{const x=text(v);if(!x||!/^[-0-9a-f]{36}$/i.test(x))throw vatError("Invalid identifier");return x;};
 export const VAT_TREATMENTS=["standard_rated","reduced_rated","zero_rated","exempt","outside_scope","no_vat_shown","reverse_charge_review_required","import_vat_review_required","blocked_vat","partially_recoverable","personal_non_business","pending_review"] as const;
@@ -124,7 +125,7 @@ const expenseValues=(input:Input,partial=false)=>{
   const decimals=["net_amount","vat_amount","gross_amount","vat_rate","exchange_rate","gbp_net_amount","gbp_vat_amount","gbp_gross_amount","business_use_percentage","recoverable_vat_amount"];
   const texts=["name","supplier_name","description","category","currency","supplier_country","supplier_vat_number","invoice_number","order_reference","payment_method","payment_source","reimbursement_status","vat_override_reason","notes"];
   for(const f of dates)if(f in input)values[f]=date(input[f]);
-  for(const f of decimals)if(f in input)values[f]=decimal(input[f]);
+  for(const f of decimals)if(f in input)values[f]=f==="vat_rate"?vatRate(input[f]):decimal(input[f]);
   for(const f of texts)if(f in input)values[f]=text(input[f]);
   if("founder_paid" in input)values.founder_paid=bool(input.founder_paid);
   if("vat_period_id" in input)values.vat_period_id=input.vat_period_id?uuid(input.vat_period_id):null;
