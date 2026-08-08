@@ -6,6 +6,7 @@ import {
   generateAccountingExport,
   manualAdjustmentProjection,
   MTD_EXPORT_TYPE,
+  MTD_VALIDATION_CONTRACT_VERSION,
   QUICKFILE_HEADERS,
   QUICKFILE_PROFILE,
   rowsToCsv,
@@ -21,6 +22,7 @@ const valid={id:expenseId,import_key:"expense-1",name:"Software purchase",descri
 const adjustment={id:"44444444-4444-4444-8444-444444444444",expense_id:expenseId,adjustment_type:"partial_refund",adjustment_date:"2026-06-03",gross_amount:"0.99",currency:"GBP",gbp_gross_amount:"0.99",net_amount:"0.83",vat_amount:"0.16",gbp_net_amount:"0.83",gbp_vat_amount:"0.16",supplier_reference:"REFUND-1",reason:"Reviewed partial refund",review_status:"review_complete",parent_supplier_name:"Supplier Ltd",parent_transaction_date:"2026-06-02",parent_invoice_date:"2026-06-01",parent_payment_date:"2026-06-02",parent_order_reference:"ORDER-1",parent_invoice_number:"INV-1",parent_payment_reference:"PAY-1",parent_gross_amount:"12.00",parent_stable_reference:"expense-1"};
 
 test("QuickFile purchase CSV uses the exact provider headings and deterministic CRLF output",()=>{
+  assert.equal(MTD_VALIDATION_CONTRACT_VERSION,2);
   assert.deepEqual(QUICKFILE_HEADERS,["Receipt date","Supplier name","Description","Total gross amount","Currency","Exchange rate","Supplier Ref.","VAT total","VAT rate","Purchase nominal code","Paid date","Paid account nominal code"]);
   const accepted=validateExpenseForQuickFile(valid,config).row!;
   assert.equal(rowsToCsv([accepted]).split("\r\n")[0],QUICKFILE_HEADERS.join(","));
@@ -39,16 +41,52 @@ test("reviewed explicit no-VAT row exports zero VAT and zero rate",()=>{
   assert.deepEqual(result.reasons,[]);assert.equal(result.row!.values["VAT total"],"0.00");assert.equal(result.row!.values["VAT rate"],"0");
 });
 
+test("reviewed canonical null no-VAT values transform to explicit CSV zeroes",()=>{
+  const result=validateExpenseForQuickFile({...valid,vat_treatment:"no_vat_shown",vat_rate:null,gbp_net_amount:null,gbp_vat_amount:null,gbp_gross_amount:"12"},config);
+  assert.deepEqual(result.reasons,[]);
+  assert.equal(result.row!.values["VAT total"],"0.00");
+  assert.equal(result.row!.values["VAT rate"],"0");
+});
+
 test("pending VAT, missing VAT, nominal mapping and foreign conversion are blocked",()=>{
   assert.ok(validateExpenseForQuickFile({...valid,vat_treatment:"pending_review"},config).reasons.includes("vat_treatment_pending"));
   assert.ok(validateExpenseForQuickFile({...valid,gbp_vat_amount:null},config).reasons.includes("reviewed_gbp_vat_missing"));
   assert.ok(validateExpenseForQuickFile({...valid,category:"Unknown"},config).reasons.includes("purchase_nominal_code_missing"));
   assert.ok(validateExpenseForQuickFile({...valid,currency:"EUR",exchange_rate:null},config).reasons.includes("foreign_currency_conversion_unresolved"));
 });
+test("VAT-bearing treatments require reviewed net, VAT and rate",()=>{
+  for(const vat_treatment of ["standard_rated","reduced_rated"]){
+    assert.ok(validateExpenseForQuickFile({...valid,vat_treatment,gbp_net_amount:null},config).reasons.includes("reviewed_gbp_net_missing"));
+    assert.ok(validateExpenseForQuickFile({...valid,vat_treatment,gbp_vat_amount:null},config).reasons.includes("reviewed_gbp_vat_missing"));
+    assert.ok(validateExpenseForQuickFile({...valid,vat_treatment,vat_rate:null},config).reasons.includes("vat_rate_unresolved"));
+  }
+});
 test("advisory provenance warnings do not block accounting export validation",()=>{
   const config={categoryNominalCodes:{Software:"7506"},paymentAccountNominalCodes:{founder_director_funded:"1201"},source:"database",confirmed:true,version:1} as never;
   const result=validateExpenseForQuickFile({...valid,warnings:["supplier_country_missing","payment_evidence_missing"]},config);
   assert.deepEqual(result.reasons,[]);
+});
+
+test("warning severity is preserved and export-specific evidence review is truthful",()=>{
+  const advisory=validateExpenseForQuickFile({...valid,warnings:["supplier_country_missing","payment_evidence_missing"]},config);
+  assert.deepEqual(advisory.canonicalWarnings,[{code:"supplier_country_missing",severity:"advisory"},{code:"payment_evidence_missing",severity:"advisory"}]);
+  const reviewRequired=validateExpenseForQuickFile({...valid,vat_treatment:"no_vat_shown",vat_rate:null,gbp_net_amount:null,gbp_vat_amount:null,warnings:["no_supplier_invoice"]},config);
+  assert.ok(reviewRequired.reasons.includes("supplier_document_review_required"));
+  assert.ok(!reviewRequired.reasons.some(reason=>reason.startsWith("critical_warning:")));
+  assert.deepEqual(reviewRequired.canonicalWarnings,[{code:"no_supplier_invoice",severity:"review_required"}]);
+  assert.deepEqual(reviewRequired.blockerDetails,[{code:"supplier_document_review_required",expense_id:expenseId,message:"No VAT is being claimed where the treatment is no VAT shown, but the supporting document still requires founder review before accounting export."}]);
+  const critical=validateExpenseForQuickFile({...valid,warnings:["gross_net_vat_mismatch"]},config);
+  assert.ok(critical.reasons.includes("critical_vat_warning:gross_net_vat_mismatch"));
+});
+
+test("VAT rate must agree with reviewed net and VAT within currency rounding tolerance",()=>{
+  assert.deepEqual(validateExpenseForQuickFile(valid,config).reasons,[]);
+  assert.deepEqual(validateExpenseForQuickFile({...valid,gbp_net_amount:"31.53",gbp_vat_amount:"6.31",gbp_gross_amount:"37.84",vat_rate:"0.20"},config).reasons,[]);
+  const mismatch=validateExpenseForQuickFile({...valid,gbp_net_amount:"5.82",gbp_vat_amount:"1.16",gbp_gross_amount:"6.98",vat_rate:"0.002"},config);
+  assert.ok(mismatch.reasons.includes("vat_rate_amount_mismatch"));
+  assert.deepEqual(mismatch.blockerDetails,[{code:"vat_rate_amount_mismatch",expense_id:expenseId,stored_rate:0.002,implied_rate:0.19931271}]);
+  const zeroNet=validateExpenseForQuickFile({...valid,gbp_net_amount:"0",gbp_vat_amount:"2",gbp_gross_amount:"2",vat_rate:"0.20"},config);
+  assert.ok(!zeroNet.reasons.includes("vat_rate_amount_mismatch"));
 });
 
 test("founder-funded paid purchases require their reviewed account mapping",()=>{
