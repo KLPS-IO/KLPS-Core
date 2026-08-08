@@ -10,6 +10,8 @@ export type VatPeriodSource="explicit"|"derived"|"none"|"conflict";
 export type VatPeriodResolution={stored_vat_period_id:string|null;effective_vat_period_id:string|null;vat_period_source:VatPeriodSource;effective_tax_point_date:string|null;matching_period_ids:string[]};
 export type VatWarningSeverity="critical"|"review_required"|"advisory";
 export type VatValidationIssue={code:string;severity:VatWarningSeverity;message:string};
+export const PAYMENT_SOURCES=["founder_director_funded","paypal","personal_credit_card","company_credit_card","business_bank","other"] as const;
+export type PaymentSource=(typeof PAYMENT_SOURCES)[number]|"unresolved";
 const vatError=(message:string,code="invalid_vat_expense",statusCode=400,details?:unknown)=>Object.assign(new Error(message),{code,statusCode,details});
 const text=(v:unknown)=>typeof v==="string"&&v.trim()?v.trim():null;
 const date=(v:unknown)=>{const x=text(v);if(!x)return null;if(!/^\d{4}-\d{2}-\d{2}$/.test(x)||Number.isNaN(Date.parse(`${x}T00:00:00Z`)))throw vatError("Invalid date");return x;};
@@ -28,6 +30,16 @@ const dateOnly=(value:unknown)=>{
 };
 const optionalVatStrings=["name","supplier_name","description","category","currency","supplier_country","supplier_vat_number","invoice_number","order_reference","payment_method","payment_source","reimbursement_status","vat_treatment","vat_review_status","evidence_coverage","notes"] as const;
 const objectArray=(value:unknown):Input[]=>Array.isArray(value)?value.filter((item):item is Input=>Boolean(item)&&typeof item==="object"&&!Array.isArray(item)):[];
+const normaliseControlledValue=(value:unknown)=>text(value)?.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"")??null;
+export const resolvePaymentSource=(row:Input):PaymentSource=>{
+  const explicit=normaliseControlledValue(row.payment_source);
+  if(explicit&&PAYMENT_SOURCES.includes(explicit as (typeof PAYMENT_SOURCES)[number]))return explicit as (typeof PAYMENT_SOURCES)[number];
+  if(row.founder_paid===true)return "founder_director_funded";
+  if(normaliseControlledValue(row.paid_by)==="founder")return "founder_director_funded";
+  const method=normaliseControlledValue(row.payment_method);
+  if(method&&PAYMENT_SOURCES.includes(method as (typeof PAYMENT_SOURCES)[number]))return method as (typeof PAYMENT_SOURCES)[number];
+  return "unresolved";
+};
 const vatContractDiagnostic=(row:Input,fields:string[])=>{
   if(process.env.NODE_ENV!=="production"&&fields.length)console.warn("VAT ledger record normalized",{record_id:typeof row.id==="string"?row.id:"unknown",fields});
 };

@@ -13,6 +13,7 @@ import {
   validateExpenseForQuickFile,
   type ExportConfig
 } from "./mtd-accounting-export.service";
+import { resolvePaymentSource } from "./finance-vat.service";
 
 const periodId="11111111-1111-4111-8111-111111111111",expenseId="22222222-2222-4222-8222-222222222222",userId="33333333-3333-4333-8333-333333333333";
 const config:ExportConfig={categoryNominalCodes:{software:"7001"},paymentAccountNominalCodes:{founder_director_funded:"3100",paypal:"1201"}};
@@ -53,6 +54,24 @@ test("advisory provenance warnings do not block accounting export validation",()
 test("founder-funded paid purchases require their reviewed account mapping",()=>{
   assert.equal(validateExpenseForQuickFile(valid,config).row!.values["Paid account nominal code"],"3100");
   assert.ok(validateExpenseForQuickFile(valid,{...config,paymentAccountNominalCodes:{} }).reasons.includes("paid_account_nominal_code_missing:founder_director_funded"));
+});
+
+test("payment sources use controlled current values and founder compatibility aliases",()=>{
+  assert.equal(resolvePaymentSource({founder_paid:true}),"founder_director_funded");
+  assert.equal(resolvePaymentSource({paid_by:"founder",payment_channel:"KLPS PayPal funded by founder credit card"}),"founder_director_funded");
+  assert.equal(resolvePaymentSource({payment_source:"paypal",founder_paid:true,paid_by:"founder"}),"paypal");
+  assert.equal(resolvePaymentSource({payment_source:"other"}),"other");
+  assert.equal(resolvePaymentSource({}),"unresolved");
+  assert.equal(resolvePaymentSource({payment_channel:"PayPal funded by founder credit card"}),"unresolved");
+});
+
+test("legacy founder maps after normalization while absent payment source remains unresolved",()=>{
+  const legacy=validateExpenseForQuickFile({...valid,founder_paid:null,paid_by:"founder",payment_channel:"KLPS PayPal funded by founder credit card"},config);
+  assert.equal(legacy.row!.values["Paid account nominal code"],"3100");
+  const unresolved=validateExpenseForQuickFile({...valid,founder_paid:null},config);
+  assert.ok(unresolved.reasons.includes("payment_source_unresolved"));
+  const other=validateExpenseForQuickFile({...valid,founder_paid:null,payment_source:"other"},{...config,paymentAccountNominalCodes:{...config.paymentAccountNominalCodes,other:"3101"}});
+  assert.equal(other.row!.values["Paid account nominal code"],"3101");
 });
 
 const db=(expense={...valid},adjustments:Record<string,unknown>[]=[]):{query:(sql:string,params?:unknown[])=>Promise<{rows:any[]}>}=>({query:async(sql:string)=>{

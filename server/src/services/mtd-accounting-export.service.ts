@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
-import { getVatLedger, listVatPeriods, vatWarningSeverity } from "./finance-vat.service";
+import { getVatLedger, listVatPeriods, resolvePaymentSource, vatWarningSeverity } from "./finance-vat.service";
 import {
   ExportConfig,
   loadEnvironmentExportConfig,
@@ -31,7 +31,6 @@ export const rowsToCsv=(rows:ExportRow[])=>[QUICKFILE_HEADERS.join(","),...rows.
 
 export const loadExportConfig=loadEnvironmentExportConfig;
 const mapping=(map:Record<string,string>,value:unknown)=>Object.entries(map).find(([key])=>normalise(key)===normalise(value))?.[1]||map.default||"";
-const paymentSource=(row:Json)=>row.founder_paid===true?"founder_director_funded":normalise(row.payment_source||row.payment_method||row.paid_by||row.payment_channel||"other");
 const supplierReference=(row:Json)=>clean(row.invoice_number)||clean(row.order_reference)||clean((row.metadata as Json|undefined)?.payment_reference)||clean(row.evidence_reference)||`FOS-${clean(row.import_key)||clean(row.id)}`;
 const optionalMoney=(value:unknown)=>present(value)?money(value):null;
 const nullableText=(value:unknown)=>clean(value)||null;
@@ -48,7 +47,7 @@ export const validateExpenseForQuickFile=(row:Json,config:ExportConfig):{reasons
   const taxDate=dateOnly(row.effective_tax_point_date||row.invoice_date||row.transaction_date||row.payment_date);
   const gross=row.gbp_gross_amount,vat=row.gbp_vat_amount,net=row.gbp_net_amount;
   const nominal=mapping(config.categoryNominalCodes,row.category);
-  const paidDate=dateOnly(row.payment_date),source=paymentSource(row),paymentCode=paidDate?mapping(config.paymentAccountNominalCodes,source):"";
+  const paidDate=dateOnly(row.payment_date),source=resolvePaymentSource(row),paymentCode=paidDate&&source!=="unresolved"?mapping(config.paymentAccountNominalCodes,source):"";
   if(clean(row.vat_review_status)!=="review_complete")reasons.push("review_not_export_ready");
   if(!clean(row.vat_treatment)||clean(row.vat_treatment)==="pending_review")reasons.push("vat_treatment_pending");
   if(!taxDate)reasons.push("effective_tax_point_missing");
@@ -59,7 +58,8 @@ export const validateExpenseForQuickFile=(row:Json,config:ExportConfig):{reasons
   if(!present(row.vat_rate))reasons.push("vat_rate_unresolved");
   if(present(net)&&present(vat)&&present(gross)&&Math.abs(Number(net)+Number(vat)-Number(gross))>0.01)reasons.push("gbp_values_do_not_reconcile");
   if(!nominal)reasons.push("purchase_nominal_code_missing");
-  if(paidDate&&!paymentCode)reasons.push(`paid_account_nominal_code_missing:${source}`);
+  if(paidDate&&source==="unresolved")reasons.push("payment_source_unresolved");
+  else if(paidDate&&!paymentCode)reasons.push(`paid_account_nominal_code_missing:${source}`);
   if(currency!=="GBP"&&!(Number(row.exchange_rate)>0&&present(row.gbp_gross_amount)))reasons.push("foreign_currency_conversion_unresolved");
   const warnings=Array.isArray(row.warnings)?row.warnings.map(String):[];
   if(!Array.isArray(row.evidence_files)||row.evidence_files.length===0)reasons.push("evidence_requirement_unsatisfied");
@@ -83,7 +83,7 @@ export async function validateAccountingExport(input:Json,config?:ExportConfig,d
   const ordered=[...ledger].sort((a,b)=>`${dateOnly(a.effective_tax_point_date)}|${a.id}`.localeCompare(`${dateOnly(b.effective_tax_point_date)}|${b.id}`));
   const rows:ExportRow[]=[],blockingReasons:Record<string,string[]>={},mapped:Record<string,string>={},paymentMapped:Record<string,string>={},missing=new Set<string>();
   const missingPayment=new Set<string>();
-  for(const expense of ordered){const result=validateExpenseForQuickFile(expense,resolved.config);if(result.nominal)mapped[clean(expense.category)||"Uncategorised"]=result.nominal;else missing.add(clean(expense.category)||"Uncategorised");const source=paymentSource(expense);if(result.paymentCode)paymentMapped[source]=result.paymentCode;else if(dateOnly(expense.payment_date))missingPayment.add(source);if(result.row)rows.push(result.row);else blockingReasons[clean(expense.id)]=result.reasons;}
+  for(const expense of ordered){const result=validateExpenseForQuickFile(expense,resolved.config);if(result.nominal)mapped[clean(expense.category)||"Uncategorised"]=result.nominal;else missing.add(clean(expense.category)||"Uncategorised");const source=resolvePaymentSource(expense);if(result.paymentCode)paymentMapped[source]=result.paymentCode;else if(dateOnly(expense.payment_date))missingPayment.add(source);if(result.row)rows.push(result.row);else blockingReasons[clean(expense.id)]=result.reasons;}
   const manual=adjustments.map(manualAdjustmentProjection);
   const source={period_id:periodId,profile:QUICKFILE_PROFILE,ledger:ordered.map(row=>({...row,evidence_files:(row.evidence_files as Json[]|undefined)?.map(e=>({id:e.id,type:e.type}))})),adjustments,config:resolved.config,config_source:resolved.source,config_confirmed:resolved.confirmed,config_version:resolved.version};
   return{export_type:MTD_EXPORT_TYPE,profile:QUICKFILE_PROFILE,validation_mode:"dry_run",generated_at:new Date().toISOString(),vat_period:period,eligible_row_count:rows.length,blocked_row_count:Object.keys(blockingReasons).length,blocked_expense_ids:Object.keys(blockingReasons),blocking_reasons:blockingReasons,mapping_config_source:resolved.source,mapping_config_confirmed:resolved.confirmed,mapping_config_version:resolved.version,mapped_nominal_codes:mapped,missing_nominal_mappings:[...missing].sort(),payment_account_mappings:paymentMapped,unmapped_payment_sources:[...missingPayment].sort(),adjustment_handling:{strategy:"exclude_from_purchase_csv_and_require_manual_credit_note",manual_adjustment_count:manual.length,items:manual},expected_csv_headings:QUICKFILE_HEADERS,source_ledger_fingerprint:fingerprint(source),rows};
