@@ -5,6 +5,7 @@ import { pool } from "../storage/postgres.client";
 type Db=Pick<PoolClient,"query">;
 type Input=Record<string,unknown>;
 type VatPeriod=Input&{id:string;start_date:unknown;end_date:unknown};
+type VatLedgerAdjustment=Input&{evidence_files:Input[]};
 export type VatPeriodSource="explicit"|"derived"|"none"|"conflict";
 export type VatPeriodResolution={stored_vat_period_id:string|null;effective_vat_period_id:string|null;vat_period_source:VatPeriodSource;effective_tax_point_date:string|null;matching_period_ids:string[]};
 const vatError=(message:string,code="invalid_vat_expense",statusCode=400)=>Object.assign(new Error(message),{code,statusCode});
@@ -21,6 +22,26 @@ const dateOnly=(value:unknown)=>{
   if(typeof value!=="string")return null;
   const candidate=value.trim().slice(0,10);
   return /^\d{4}-\d{2}-\d{2}$/.test(candidate)&&!Number.isNaN(Date.parse(`${candidate}T00:00:00Z`))?candidate:null;
+};
+const optionalVatStrings=["name","supplier_name","description","category","currency","supplier_country","supplier_vat_number","invoice_number","order_reference","payment_method","payment_source","reimbursement_status","vat_treatment","vat_review_status","evidence_coverage","notes"] as const;
+const objectArray=(value:unknown):Input[]=>Array.isArray(value)?value.filter((item):item is Input=>Boolean(item)&&typeof item==="object"&&!Array.isArray(item)):[];
+const vatContractDiagnostic=(row:Input,fields:string[])=>{
+  if(process.env.NODE_ENV!=="production"&&fields.length)console.warn("VAT ledger record normalized",{record_id:typeof row.id==="string"?row.id:"unknown",fields});
+};
+export const normalizeVatLedgerRow=(row:Input):Input&{evidence_files:Input[];adjustments:VatLedgerAdjustment[];warnings:string[]}=>{
+  const malformed:string[]=[];
+  if(!Array.isArray(row.evidence_files))malformed.push("evidence_files");
+  if(!Array.isArray(row.adjustments))malformed.push("adjustments");
+  if(!Array.isArray(row.warnings))malformed.push("warnings");
+  const evidenceFiles=objectArray(row.evidence_files);
+  const adjustments=objectArray(row.adjustments).map((adjustment,index)=>{
+    if(!Array.isArray(adjustment.evidence_files))malformed.push(`adjustments[${index}].evidence_files`);
+    return{...adjustment,evidence_files:objectArray(adjustment.evidence_files)};
+  });
+  const normalized:Input={...row};
+  for(const field of optionalVatStrings)if(normalized[field]===undefined)normalized[field]=null;
+  vatContractDiagnostic(row,malformed);
+  return{...normalized,evidence_files:evidenceFiles,adjustments,warnings:Array.isArray(row.warnings)?row.warnings.filter((item):item is string=>typeof item==="string"):[]};
 };
 
 export const resolveVatPeriod=(expense:Input,periods:VatPeriod[]):VatPeriodResolution=>{
@@ -145,7 +166,7 @@ export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
     if(!supplier)warnings.push("no_supplier_invoice");if(!payment)warnings.push("payment_evidence_missing");
     const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");if((duplicateKeys.get(key)??0)>1)warnings.push("possible_duplicate");
     const effectivePeriod=periods.find(period=>period.id===resolution.effective_vat_period_id);
-    return {...row,...resolution,vat_period_start:effectivePeriod?.start_date??null,vat_period_end:effectivePeriod?.end_date??null,evidence_coverage:coverage,warnings};
+    return normalizeVatLedgerRow({...row,...resolution,vat_period_start:effectivePeriod?.start_date??null,vat_period_end:effectivePeriod?.end_date??null,evidence_coverage:coverage,warnings});
   });
 };
 export const createComplianceDocument=async(input:Input,userId:string,db:Db=pool)=>{

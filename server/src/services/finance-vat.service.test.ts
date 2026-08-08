@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { createHistoricalExpense,expenseWarnings,getVatLedger,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense } from "./finance-vat.service";
+import { createHistoricalExpense,expenseWarnings,getVatLedger,normalizeVatLedgerRow,resolveVatPeriod,suggestVatPeriod,updateHistoricalExpense } from "./finance-vat.service";
 
 const user="22222222-2222-4222-8222-222222222222";
 test("VAT Phase 1A migration is additive and seeds periods but no expenses",()=>{
@@ -71,6 +71,36 @@ test("VAT ledger filtering includes explicit and derived rows but excludes archi
   assert.match(queries[1],/archived_at IS NULL/);
   assert.match(queries[1],/transaction_date::text AS transaction_date/);
   assert.doesNotMatch(queries[1],/UPDATE|INSERT/);
+});
+test("VAT ledger contract preserves historical rows and normalizes missing optional collections",()=>{
+  const historical=normalizeVatLedgerRow({id:"historical",supplier_name:null,notes:undefined,evidence_files:undefined,adjustments:[{id:"adjustment"}],warnings:undefined});
+  assert.equal(historical.id,"historical");
+  assert.equal(historical.notes,null);
+  assert.deepEqual(historical.evidence_files,[]);
+  assert.deepEqual(historical.warnings,[]);
+  assert.deepEqual(historical.adjustments,[{id:"adjustment",evidence_files:[]}]);
+});
+test("VAT ledger response contract handles empty, complete, partial, missing-evidence, and duplicate-compatible rows",async()=>{
+  const periodId="11111111-1111-4111-8111-111111111111";
+  const period={id:periodId,start_date:"2025-05-08",end_date:"2026-04-30"};
+  const ledger=async(rows:Record<string,unknown>[])=>{
+    let query=0;
+    return getVatLedger(undefined,{query:async()=>({rows:query++===0?[period]:rows})} as never);
+  };
+  assert.deepEqual(await ledger([]),[]);
+  const rows=await ledger([
+    {id:"complete",name:"Complete",supplier_name:"Supplier",category:"Other",currency:"GBP",transaction_date:"2025-05-08",gross_amount:"12",vat_treatment:"standard_rated",supplier_country:"GB",evidence_files:[{id:"invoice",type:"full_vat_invoice"}],adjustments:[]},
+    {id:"partial",transaction_date:"2025-05-09",gross_amount:"5"},
+    {id:"missing-linked-evidence",supplier_name:"Supplier",transaction_date:"2025-05-10",gross_amount:"7",evidence_files:null,adjustments:[{id:"refund",evidence_files:undefined}]},
+    {id:"duplicate-a",supplier_name:"Same",transaction_date:"2025-05-11",gross_amount:"9"},
+    {id:"duplicate-b",supplier_name:"Same",transaction_date:"2025-05-11",gross_amount:"9"},
+  ]);
+  assert.equal(rows.length,5);
+  assert.deepEqual(rows[1].evidence_files,[]);
+  assert.deepEqual(rows[1].adjustments,[]);
+  assert.deepEqual(rows[2].adjustments,[{id:"refund",evidence_files:[]}]);
+  assert.ok((rows[3].warnings as string[]).includes("possible_duplicate"));
+  assert.ok((rows[4].warnings as string[]).includes("possible_duplicate"));
 });
 test("warnings preserve save but review complete is blocked",async()=>{
   assert.deepEqual(expenseWarnings({gbp_net_amount:"10",gbp_vat_amount:"2",gbp_gross_amount:"11",currency:"USD"}),["gross_net_vat_mismatch","foreign_currency_without_conversion","pending_vat_treatment","supplier_country_missing"]);
