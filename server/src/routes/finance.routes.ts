@@ -73,6 +73,14 @@ import {
   getAccountingExportConfig,
   saveAccountingExportConfig
 } from "../services/accounting-export-config.service";
+import {
+  createVatFiling,
+  getFinanceCompliance,
+  listFinanceActions,
+  listVatFilings,
+  refreshFinanceActions,
+  updateFinanceAction
+} from "../services/finance-compliance.service";
 
 const router = express.Router();
 
@@ -232,6 +240,12 @@ const publicEvidence = (row: Record<string, unknown>) => {
 };
 
 router.get("/vat-periods",asyncHandler(async(_req,res)=>res.json(jsonOk({vat_periods:await listVatPeriods()}))));
+router.get("/compliance",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({compliance:await getFinanceCompliance()}))));
+router.get("/actions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({actions:await listFinanceActions()}))));
+router.post("/actions/refresh",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({summary:await refreshFinanceActions(req.dataRoomUser!.id)}))));
+router.patch("/actions/:id",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({action:await updateFinanceAction(getParam(req.params.id),requireText(req.body?.status,"status"),requireText(req.body?.change_reason,"change_reason"),req.dataRoomUser!.id)}))));
+router.get("/vat-filings",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({filings:await listVatFilings()}))));
+router.post("/vat-filings",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({filing:await createVatFiling(req.body??{},req.dataRoomUser!.id)}))));
 router.get("/vat-periods/suggest",asyncHandler(async(req,res)=>res.json(jsonOk({vat_period:await suggestVatPeriod(req.query.tax_point_date)}))));
 router.get("/vat-ledger",asyncHandler(async(req,res)=>res.json(jsonOk({
   label:"VAT working paper – not an HMRC submission",
