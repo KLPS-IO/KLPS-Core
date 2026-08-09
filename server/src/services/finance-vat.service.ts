@@ -7,7 +7,8 @@ type Input=Record<string,unknown>;
 type VatPeriod=Input&{id:string;start_date:unknown;end_date:unknown};
 type VatLedgerAdjustment=Input&{evidence_files:Input[]};
 export type VatPeriodSource="explicit"|"derived"|"none"|"conflict";
-export type VatPeriodResolution={stored_vat_period_id:string|null;effective_vat_period_id:string|null;vat_period_source:VatPeriodSource;effective_tax_point_date:string|null;matching_period_ids:string[]};
+export type VatPeriodDateConflict={stored_vat_period_id:string;effective_tax_point_date:string;date_derived_vat_period_id:string|null;date_derived_vat_period_source:"derived"|"none"|"conflict";date_derived_matching_period_ids:string[]};
+export type VatPeriodResolution={stored_vat_period_id:string|null;effective_vat_period_id:string|null;vat_period_source:VatPeriodSource;effective_tax_point_date:string|null;matching_period_ids:string[];vat_period_date_conflict:VatPeriodDateConflict|null};
 export type VatWarningSeverity="critical"|"review_required"|"advisory";
 export type VatValidationIssue={code:string;severity:VatWarningSeverity;message:string};
 export const PAYMENT_SOURCES=["founder_director_funded","paypal","personal_credit_card","company_credit_card","business_bank","other"] as const;
@@ -63,11 +64,17 @@ export const normalizeVatLedgerRow=(row:Input):Input&{evidence_files:Input[];adj
 export const resolveVatPeriod=(expense:Input,periods:VatPeriod[]):VatPeriodResolution=>{
   const stored=text(expense.vat_period_id);
   const taxPoint=dateOnly(expense.invoice_date)??dateOnly(expense.transaction_date)??dateOnly(expense.payment_date);
-  if(stored&&periods.some(period=>period.id===stored))return{stored_vat_period_id:stored,effective_vat_period_id:stored,vat_period_source:"explicit",effective_tax_point_date:taxPoint,matching_period_ids:[stored]};
-  if(!taxPoint)return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:"none",effective_tax_point_date:null,matching_period_ids:[]};
-  const matches=periods.filter(period=>{const start=dateOnly(period.start_date),end=dateOnly(period.end_date);return Boolean(start&&end&&start<=taxPoint&&taxPoint<=end);});
-  if(matches.length===1)return{stored_vat_period_id:stored,effective_vat_period_id:matches[0].id,vat_period_source:"derived",effective_tax_point_date:taxPoint,matching_period_ids:[matches[0].id]};
-  return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:matches.length>1?"conflict":"none",effective_tax_point_date:taxPoint,matching_period_ids:matches.map(period=>period.id)};
+  const matches=taxPoint?periods.filter(period=>{const start=dateOnly(period.start_date),end=dateOnly(period.end_date);return Boolean(start&&end&&start<=taxPoint&&taxPoint<=end);}):[];
+  const explicit=stored?periods.find(period=>period.id===stored):undefined;
+  if(explicit){
+    const storedId=stored as string;
+    const start=dateOnly(explicit.start_date),end=dateOnly(explicit.end_date),outside=Boolean(taxPoint&&start&&end&&(taxPoint<start||taxPoint>end));
+    const derivedSource=matches.length===1?"derived":matches.length>1?"conflict":"none";
+    return{stored_vat_period_id:storedId,effective_vat_period_id:storedId,vat_period_source:"explicit",effective_tax_point_date:taxPoint,matching_period_ids:[storedId],vat_period_date_conflict:outside&&taxPoint?{stored_vat_period_id:storedId,effective_tax_point_date:taxPoint,date_derived_vat_period_id:matches.length===1?matches[0].id:null,date_derived_vat_period_source:derivedSource,date_derived_matching_period_ids:matches.map(period=>period.id)}:null};
+  }
+  if(!taxPoint)return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:"none",effective_tax_point_date:null,matching_period_ids:[],vat_period_date_conflict:null};
+  if(matches.length===1)return{stored_vat_period_id:stored,effective_vat_period_id:matches[0].id,vat_period_source:"derived",effective_tax_point_date:taxPoint,matching_period_ids:[matches[0].id],vat_period_date_conflict:null};
+  return{stored_vat_period_id:stored,effective_vat_period_id:null,vat_period_source:matches.length>1?"conflict":"none",effective_tax_point_date:taxPoint,matching_period_ids:matches.map(period=>period.id),vat_period_date_conflict:null};
 };
 
 export const expenseWarnings=(row:Input)=>{
@@ -110,8 +117,9 @@ const warningMessages:Record<string,string>={
   alternative_vat_evidence_specialist_review_required:"Alternative VAT evidence requires specialist review before this transaction can proceed.",
   supplier_document_status_incompatible_with_vat_claim:"Supporting-document acceptance without a VAT claim cannot approve a VAT-bearing transaction.",
   vat_invoice_evidence_required:"Recognised VAT-invoice evidence is required for this supplier-document decision.",
+  vat_period_date_conflict:"The stored VAT period does not contain the effective tax-point date. Founder review is required before accounting export.",
 };
-export const vatWarningSeverity=(code:string):VatWarningSeverity=>
+export const vatWarningSeverity=(code:string):VatWarningSeverity=>code==="vat_period_date_conflict"?"review_required":
   ["gross_net_vat_mismatch","foreign_currency_without_conversion","pending_vat_treatment","reverse_charge_review_required","vat_net_amount_missing","vat_amount_missing","vat_gross_amount_missing","vat_rate_missing","vat_period_unconfirmed"].includes(code)?"critical":
     ["supplier_vat_number_missing","personal_mixed_use_review_required","no_supplier_invoice","vat_invoice_review_pending","vat_period_conflict","review_not_ready","supplier_document_review_required","alternative_vat_evidence_specialist_review_required","supplier_document_status_incompatible_with_vat_claim","vat_invoice_evidence_required"].includes(code)?"review_required":"advisory";
 const validationIssue=(code:string):VatValidationIssue=>({code,severity:vatWarningSeverity(code),message:warningMessages[code]??code.replace(/_/g," ")});
@@ -235,6 +243,7 @@ export const getVatLedger=async(periodId:unknown,db:Db=pool)=>{
     const coverage=adjustment?"refund_or_credit_adjustment_present":vatInvoice?"vat_invoice_present":supplier&&payment?"supplier_document_plus_payment_evidence":supplier?"supplier_document_only":payment?"payment_evidence_only":files.length?"requires_review":"no_evidence";
     const warnings=expenseWarnings(row);
     if(resolution.vat_period_source==="conflict")warnings.push("vat_period_conflict");
+    if(resolution.vat_period_date_conflict)warnings.push("vat_period_date_conflict");
     if(!supplier)warnings.push("no_supplier_invoice");if(!payment)warnings.push("payment_evidence_missing");
     for(const issue of reviewCompletionIssues(row))if(!warnings.includes(issue.code))warnings.push(issue.code);
     const key=[row.supplier_name,row.transaction_date??row.payment_date,row.gross_amount].join("|");if((duplicateKeys.get(key)??0)>1)warnings.push("possible_duplicate");

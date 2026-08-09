@@ -22,7 +22,7 @@ const valid={id:expenseId,import_key:"expense-1",name:"Software purchase",descri
 const adjustment={id:"44444444-4444-4444-8444-444444444444",expense_id:expenseId,adjustment_type:"partial_refund",adjustment_date:"2026-06-03",gross_amount:"0.99",currency:"GBP",gbp_gross_amount:"0.99",net_amount:"0.83",vat_amount:"0.16",gbp_net_amount:"0.83",gbp_vat_amount:"0.16",supplier_reference:"REFUND-1",reason:"Reviewed partial refund",review_status:"review_complete",parent_supplier_name:"Supplier Ltd",parent_transaction_date:"2026-06-02",parent_invoice_date:"2026-06-01",parent_payment_date:"2026-06-02",parent_order_reference:"ORDER-1",parent_invoice_number:"INV-1",parent_payment_reference:"PAY-1",parent_gross_amount:"12.00",parent_stable_reference:"expense-1"};
 
 test("QuickFile purchase CSV uses the exact provider headings and deterministic CRLF output",()=>{
-  assert.equal(MTD_VALIDATION_CONTRACT_VERSION,3);
+  assert.equal(MTD_VALIDATION_CONTRACT_VERSION,4);
   assert.deepEqual(QUICKFILE_HEADERS,["Receipt date","Supplier name","Description","Total gross amount","Currency","Exchange rate","Supplier Ref.","VAT total","VAT rate","Purchase nominal code","Paid date","Paid account nominal code"]);
   const accepted=validateExpenseForQuickFile(valid,config).row!;
   assert.equal(rowsToCsv([accepted]).split("\r\n")[0],QUICKFILE_HEADERS.join(","));
@@ -53,6 +53,16 @@ test("pending VAT, missing VAT, nominal mapping and foreign conversion are block
   assert.ok(validateExpenseForQuickFile({...valid,gbp_vat_amount:null},config).reasons.includes("reviewed_gbp_vat_missing"));
   assert.ok(validateExpenseForQuickFile({...valid,category:"Unknown"},config).reasons.includes("purchase_nominal_code_missing"));
   assert.ok(validateExpenseForQuickFile({...valid,currency:"EUR",exchange_rate:null},config).reasons.includes("foreign_currency_conversion_unresolved"));
+});
+test("explicit VAT-period date conflicts block OpenAI and eBay without changing stored fields",()=>{
+  const nextPeriod="55555555-5555-4555-8555-555555555555";
+  const openAiConflict={stored_vat_period_id:periodId,effective_tax_point_date:"2026-07-20",date_derived_vat_period_id:nextPeriod,date_derived_vat_period_source:"derived",date_derived_matching_period_ids:[nextPeriod]} as const;
+  const openAi=validateExpenseForQuickFile({...valid,id:"openai",invoice_date:"2026-07-20",transaction_date:"2026-07-20",payment_date:"2026-07-20",effective_tax_point_date:"2026-07-20",vat_period_date_conflict:openAiConflict},config);
+  assert.equal(openAi.disposition,"blocked");assert.ok(openAi.reasons.includes("vat_period_date_conflict"));assert.equal(openAi.row,null);
+  assert.deepEqual(openAi.blockerDetails.find(item=>item.code==="vat_period_date_conflict"),{code:"vat_period_date_conflict",expense_id:"openai",...openAiConflict,message:"The stored VAT period does not contain the effective tax-point date. Founder review is required before accounting export."});
+  const ebayConflict={stored_vat_period_id:periodId,effective_tax_point_date:"2026-10-05",date_derived_vat_period_id:null,date_derived_vat_period_source:"none",date_derived_matching_period_ids:[]} as const;
+  const ebay=validateExpenseForQuickFile({...valid,id:"ebay",invoice_date:"2026-10-05",transaction_date:"2025-10-05",payment_date:"2026-10-05",effective_tax_point_date:"2026-10-05",vat_period_date_conflict:ebayConflict},config);
+  assert.equal(ebay.disposition,"blocked");assert.deepEqual(ebay.reasons,["vat_period_date_conflict"]);assert.equal(ebay.row,null);
 });
 test("VAT-bearing treatments require reviewed net, VAT and rate",()=>{
   for(const vat_treatment of ["standard_rated","reduced_rated"]){
@@ -156,6 +166,21 @@ test("insufficient supplier evidence is explicitly excluded and changes the sour
   assert.deepEqual(result.rows,[]);
   const pending=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db({...valid,vat_treatment:"no_vat_shown",supplier_document_review_status:"pending_review"}) as never);
   assert.notEqual(result.source_ledger_fingerprint,pending.source_ledger_fingerprint);
+});
+test("fingerprint binds exact selected IDs, dispositions and eligible membership",async()=>{
+  const eligible=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid) as never);
+  const conflict={...valid,invoice_date:"2026-10-05",transaction_date:"2025-10-05",payment_date:"2026-10-05"};
+  const blocked=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(conflict) as never);
+  const differentId=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db({...valid,id:"66666666-6666-4666-8666-666666666666"}) as never);
+  assert.deepEqual(eligible.rows.map(row=>row.expense_id),[expenseId]);assert.deepEqual(blocked.rows,[]);assert.deepEqual(blocked.blocked_expense_ids,[expenseId]);
+  assert.notEqual(eligible.source_ledger_fingerprint,blocked.source_ledger_fingerprint);assert.notEqual(eligible.source_ledger_fingerprint,differentId.source_ledger_fingerprint);
+});
+
+test("generation serializes exactly the validated eligible IDs",async()=>{
+  const validation=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid) as never);
+  const generated=await generateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE,expected_source_fingerprint:validation.source_ledger_fingerprint},userId,config,db(valid) as never);
+  assert.deepEqual(generated.validation.rows.map(row=>row.expense_id),validation.rows.map(row=>row.expense_id));
+  assert.equal(generated.csv.split("\r\n").filter(Boolean).length,validation.rows.length+1);
 });
 
 test("manual adjustment reference resolution prefers commercial references then stable expense identity",()=>{

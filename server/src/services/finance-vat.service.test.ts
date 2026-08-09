@@ -61,15 +61,26 @@ test("canonical VAT period resolution prefers a valid explicit period",()=>{
     {id:"period-a",start_date:"2025-05-08T00:00:00.000Z",end_date:"2026-04-30T00:00:00.000Z"},
     {id:"period-b",start_date:"2026-05-01",end_date:"2026-07-31"},
   ];
-  assert.deepEqual(resolveVatPeriod({vat_period_id:"period-b",invoice_date:"2025-05-08",transaction_date:"2026-05-02"},periods),{
-    stored_vat_period_id:"period-b",effective_vat_period_id:"period-b",vat_period_source:"explicit",effective_tax_point_date:"2025-05-08",matching_period_ids:["period-b"],
+  assert.deepEqual(resolveVatPeriod({vat_period_id:"period-b",invoice_date:"2026-05-01",transaction_date:"2025-05-08"},periods),{
+    stored_vat_period_id:"period-b",effective_vat_period_id:"period-b",vat_period_source:"explicit",effective_tax_point_date:"2026-05-01",matching_period_ids:["period-b"],vat_period_date_conflict:null,
   });
+});
+test("explicit VAT periods preserve the stored assignment and expose date-derived conflicts",()=>{
+  const periods=[{id:"overdue",start_date:"2025-05-08",end_date:"2026-04-30"},{id:"next",start_date:"2026-05-01",end_date:"2026-07-31"}];
+  const openAi=resolveVatPeriod({vat_period_id:"overdue",invoice_date:"2026-07-20",transaction_date:"2026-07-20",payment_date:"2026-07-20"},periods);
+  assert.equal(openAi.effective_vat_period_id,"overdue");assert.equal(openAi.vat_period_source,"explicit");
+  assert.deepEqual(openAi.vat_period_date_conflict,{stored_vat_period_id:"overdue",effective_tax_point_date:"2026-07-20",date_derived_vat_period_id:"next",date_derived_vat_period_source:"derived",date_derived_matching_period_ids:["next"]});
+  const ebay=resolveVatPeriod({vat_period_id:"overdue",invoice_date:"2026-10-05",transaction_date:"2025-10-05",payment_date:"2026-10-05"},periods);
+  assert.equal(ebay.effective_tax_point_date,"2026-10-05");assert.equal(ebay.effective_vat_period_id,"overdue");
+  assert.deepEqual(ebay.vat_period_date_conflict,{stored_vat_period_id:"overdue",effective_tax_point_date:"2026-10-05",date_derived_vat_period_id:null,date_derived_vat_period_source:"none",date_derived_matching_period_ids:[]});
 });
 test("canonical VAT period resolution derives by invoice, transaction, then payment date",()=>{
   const periods=[{id:"period-a",start_date:"2025-05-08",end_date:"2026-04-30"}];
   assert.equal(resolveVatPeriod({invoice_date:"2025-05-08T23:00:00-08:00",transaction_date:"2026-05-01",payment_date:"2026-05-02"},periods).effective_vat_period_id,"period-a");
   assert.equal(resolveVatPeriod({transaction_date:"2026-04-30T00:00:00.000Z"},periods).effective_vat_period_id,"period-a");
   assert.equal(resolveVatPeriod({payment_date:"2025-05-08"},periods).effective_vat_period_id,"period-a");
+  assert.equal(resolveVatPeriod({invoice_date:"2025-05-08"},periods).vat_period_date_conflict,null);
+  assert.equal(resolveVatPeriod({invoice_date:"2026-04-30"},periods).effective_vat_period_id,"period-a");
 });
 test("canonical VAT period resolution reports none and overlapping conflicts without choosing",()=>{
   assert.equal(resolveVatPeriod({transaction_date:"2025-05-07"},[{id:"period",start_date:"2025-05-08",end_date:"2026-04-30"}]).vat_period_source,"none");
