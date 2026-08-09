@@ -25,6 +25,19 @@ test("supplier-document review migration is additive, constrained, rollback-safe
   assert.doesNotMatch(rollback,/DROP TABLE|evidence_links/i);
   assert.match(history,/OLD\.id, OLD\.version, to_jsonb\(OLD\), NEW\.change_reason, NEW\.updated_by/);
 });
+
+test("expense category taxonomy migration is narrow, idempotent and rollback-audited",()=>{
+  const sql=readFileSync("server/sql/20260809_expense_category_taxonomy.sql","utf8");
+  const rollback=readFileSync("server/sql/20260809_expense_category_taxonomy.rollback.sql","utf8");
+  assert.match(sql,/^BEGIN;/m);assert.match(sql,/^COMMIT;/m);assert.match(rollback,/^BEGIN;/m);assert.match(rollback,/^COMMIT;/m);
+  assert.match(sql,/SET category = 'Prototype materials and electronics'[\s\S]*WHERE category = 'Prototype materials\/electronics'/);
+  assert.match(sql,/category_nominal_codes - 'Prototype materials\/electronics'/);assert.match(sql,/Prototype materials and electronics/);
+  assert.match(sql,/accounting_export_config_versions/);assert.match(sql,/ON CONFLICT \(config_id, version\) DO NOTHING/);
+  assert.match(rollback,/prior\.snapshot->>'category' = 'Prototype materials\/electronics'/);assert.match(rollback,/prior\.snapshot->'category_nominal_codes'/);
+  for(const protectedField of ["vat_amount","vat_rate","vat_review_status","supplier_document_review_status","payment_source","evidence"]){
+    assert.doesNotMatch(sql,new RegExp(`SET[^;]*${protectedField}`,"i"));
+  }
+});
 test("historical expense creation uses approved defaults and decimals",async()=>{
   let query="",params:unknown[]=[];
   const db={query:async(q:string,p:unknown[])=>{query=q;params=p;return{rows:[{net_amount:"8.33",vat_amount:"1.67",gross_amount:"10.00",currency:"GBP"}]};}};
