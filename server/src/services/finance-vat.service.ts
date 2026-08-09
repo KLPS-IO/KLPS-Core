@@ -20,6 +20,7 @@ const vatRate=(v:unknown)=>{const x=decimal(v);if(x!==null&&Number(x)>1)throw va
 const bool=(v:unknown)=>typeof v==="boolean"?v:null;
 const uuid=(v:unknown)=>{const x=text(v);if(!x||!/^[-0-9a-f]{36}$/i.test(x))throw vatError("Invalid identifier");return x;};
 export const VAT_TREATMENTS=["standard_rated","reduced_rated","zero_rated","exempt","outside_scope","no_vat_shown","reverse_charge_review_required","import_vat_review_required","blocked_vat","partially_recoverable","personal_non_business","pending_review"] as const;
+export const SUPPLIER_DOCUMENT_REVIEW_STATUSES=["pending_review","vat_invoice_confirmed","supporting_document_accepted_no_vat_claim","alternative_vat_evidence_requires_specialist_review","insufficient_evidence_exclude_from_export"] as const;
 const REVIEW=["pending_review","in_review","ready_for_review","review_complete"];
 const optionalEnum=(v:unknown,values:readonly string[])=>{const x=text(v);if(x&&!values.includes(x))throw vatError("Invalid controlled value");return x;};
 const dateOnly=(value:unknown)=>{
@@ -28,7 +29,7 @@ const dateOnly=(value:unknown)=>{
   const candidate=value.trim().slice(0,10);
   return /^\d{4}-\d{2}-\d{2}$/.test(candidate)&&!Number.isNaN(Date.parse(`${candidate}T00:00:00Z`))?candidate:null;
 };
-const optionalVatStrings=["name","supplier_name","description","category","currency","supplier_country","supplier_vat_number","invoice_number","order_reference","payment_method","payment_source","reimbursement_status","vat_treatment","vat_review_status","evidence_coverage","notes"] as const;
+const optionalVatStrings=["name","supplier_name","description","category","currency","supplier_country","supplier_vat_number","invoice_number","order_reference","payment_method","payment_source","reimbursement_status","vat_treatment","vat_review_status","supplier_document_review_status","evidence_coverage","notes"] as const;
 const objectArray=(value:unknown):Input[]=>Array.isArray(value)?value.filter((item):item is Input=>Boolean(item)&&typeof item==="object"&&!Array.isArray(item)):[];
 const normaliseControlledValue=(value:unknown)=>text(value)?.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"")??null;
 export const resolvePaymentSource=(row:Input):PaymentSource=>{
@@ -105,10 +106,14 @@ const warningMessages:Record<string,string>={
   payment_evidence_missing:"Payment evidence is not linked.",
   possible_duplicate:"Possible historical duplicate; confirm before export.",
   review_not_ready:"Move the transaction to Ready for review before completing it.",
+  supplier_document_review_required:"Supplier document review must be completed.",
+  alternative_vat_evidence_specialist_review_required:"Alternative VAT evidence requires specialist review before this transaction can proceed.",
+  supplier_document_status_incompatible_with_vat_claim:"Supporting-document acceptance without a VAT claim cannot approve a VAT-bearing transaction.",
+  vat_invoice_evidence_required:"Recognised VAT-invoice evidence is required for this supplier-document decision.",
 };
 export const vatWarningSeverity=(code:string):VatWarningSeverity=>
   ["gross_net_vat_mismatch","foreign_currency_without_conversion","pending_vat_treatment","reverse_charge_review_required","vat_net_amount_missing","vat_amount_missing","vat_gross_amount_missing","vat_rate_missing","vat_period_unconfirmed"].includes(code)?"critical":
-    ["supplier_vat_number_missing","personal_mixed_use_review_required","no_supplier_invoice","vat_invoice_review_pending","vat_period_conflict","review_not_ready"].includes(code)?"review_required":"advisory";
+    ["supplier_vat_number_missing","personal_mixed_use_review_required","no_supplier_invoice","vat_invoice_review_pending","vat_period_conflict","review_not_ready","supplier_document_review_required","alternative_vat_evidence_specialist_review_required","supplier_document_status_incompatible_with_vat_claim","vat_invoice_evidence_required"].includes(code)?"review_required":"advisory";
 const validationIssue=(code:string):VatValidationIssue=>({code,severity:vatWarningSeverity(code),message:warningMessages[code]??code.replace(/_/g," ")});
 export const reviewCompletionIssues=(row:Input):VatValidationIssue[]=>{
   const codes=expenseWarnings(row).filter(code=>vatWarningSeverity(code)==="critical");
@@ -126,8 +131,14 @@ export const reviewCompletionIssues=(row:Input):VatValidationIssue[]=>{
 export const reviewReadinessIssues=(row:Input):VatValidationIssue[]=>{
   const issues=reviewCompletionIssues(row),treatment=text(row.vat_treatment);
   const files=objectArray(row.evidence_files).filter(file=>file.document_status===undefined||file.document_status==="Active");
+  const supplierReview=text(row.supplier_document_review_status)??"pending_review";
+  const hasVatInvoice=files.some(file=>["full_vat_invoice","simplified_vat_invoice"].includes(String(file.type??file.vat_evidence_type??"")));
   const needsVatInvoice=treatment==="standard_rated"||treatment==="reduced_rated"||Number(row.recoverable_vat_amount)>0;
-  if(needsVatInvoice&&!files.some(file=>["full_vat_invoice","simplified_vat_invoice"].includes(String(file.type??file.vat_evidence_type??""))))issues.push(validationIssue("no_supplier_invoice"));
+  if(needsVatInvoice&&!hasVatInvoice)issues.push(validationIssue("no_supplier_invoice"));
+  if(supplierReview==="pending_review"&&(treatment==="no_vat_shown"||!hasVatInvoice))issues.push(validationIssue("supplier_document_review_required"));
+  if(supplierReview==="alternative_vat_evidence_requires_specialist_review")issues.push(validationIssue("alternative_vat_evidence_specialist_review_required"));
+  if(supplierReview==="vat_invoice_confirmed"&&!hasVatInvoice)issues.push(validationIssue("vat_invoice_evidence_required"));
+  if(needsVatInvoice&&supplierReview==="supporting_document_accepted_no_vat_claim")issues.push(validationIssue("supplier_document_status_incompatible_with_vat_claim"));
   return issues;
 };
 
@@ -143,6 +154,7 @@ const expenseValues=(input:Input,partial=false)=>{
   if("vat_period_id" in input)values.vat_period_id=input.vat_period_id?uuid(input.vat_period_id):null;
   if("vat_treatment" in input)values.vat_treatment=optionalEnum(input.vat_treatment,VAT_TREATMENTS);
   if("vat_review_status" in input)values.vat_review_status=optionalEnum(input.vat_review_status,REVIEW);
+  if("supplier_document_review_status" in input)values.supplier_document_review_status=optionalEnum(input.supplier_document_review_status,SUPPLIER_DOCUMENT_REVIEW_STATUSES);
   if(!partial){
     values.supplier_name=text(input.supplier_name);
     values.category=text(input.category)??"To Classify";

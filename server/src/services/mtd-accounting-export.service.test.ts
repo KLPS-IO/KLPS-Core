@@ -18,11 +18,11 @@ import { resolvePaymentSource } from "./finance-vat.service";
 
 const periodId="11111111-1111-4111-8111-111111111111",expenseId="22222222-2222-4222-8222-222222222222",userId="33333333-3333-4333-8333-333333333333";
 const config:ExportConfig={categoryNominalCodes:{software:"7001"},paymentAccountNominalCodes:{founder_director_funded:"3100",paypal:"1201"}};
-const valid={id:expenseId,import_key:"expense-1",name:"Software purchase",description:"Reviewed software purchase",supplier_name:"Supplier Ltd",category:"Software",currency:"GBP",invoice_date:"2026-06-01",transaction_date:"2026-06-02",payment_date:"2026-06-02",gbp_net_amount:"10.00",gbp_vat_amount:"2.00",gbp_gross_amount:"12.00",vat_amount:"2.00",vat_rate:"0.20",vat_treatment:"standard_rated",vat_review_status:"review_complete",vat_period_id:periodId,supplier_country:"GB",invoice_number:"INV-1",founder_paid:true,evidence_files:[{id:"e",type:"full_vat_invoice"},{id:"p",type:"proof_of_payment"}],warnings:[]};
+const valid={id:expenseId,import_key:"expense-1",name:"Software purchase",description:"Reviewed software purchase",supplier_name:"Supplier Ltd",category:"Software",currency:"GBP",invoice_date:"2026-06-01",transaction_date:"2026-06-02",payment_date:"2026-06-02",gbp_net_amount:"10.00",gbp_vat_amount:"2.00",gbp_gross_amount:"12.00",vat_amount:"2.00",vat_rate:"0.20",vat_treatment:"standard_rated",vat_review_status:"review_complete",supplier_document_review_status:"vat_invoice_confirmed",vat_period_id:periodId,supplier_country:"GB",invoice_number:"INV-1",founder_paid:true,evidence_files:[{id:"e",type:"full_vat_invoice"},{id:"p",type:"proof_of_payment"}],warnings:[]};
 const adjustment={id:"44444444-4444-4444-8444-444444444444",expense_id:expenseId,adjustment_type:"partial_refund",adjustment_date:"2026-06-03",gross_amount:"0.99",currency:"GBP",gbp_gross_amount:"0.99",net_amount:"0.83",vat_amount:"0.16",gbp_net_amount:"0.83",gbp_vat_amount:"0.16",supplier_reference:"REFUND-1",reason:"Reviewed partial refund",review_status:"review_complete",parent_supplier_name:"Supplier Ltd",parent_transaction_date:"2026-06-02",parent_invoice_date:"2026-06-01",parent_payment_date:"2026-06-02",parent_order_reference:"ORDER-1",parent_invoice_number:"INV-1",parent_payment_reference:"PAY-1",parent_gross_amount:"12.00",parent_stable_reference:"expense-1"};
 
 test("QuickFile purchase CSV uses the exact provider headings and deterministic CRLF output",()=>{
-  assert.equal(MTD_VALIDATION_CONTRACT_VERSION,2);
+  assert.equal(MTD_VALIDATION_CONTRACT_VERSION,3);
   assert.deepEqual(QUICKFILE_HEADERS,["Receipt date","Supplier name","Description","Total gross amount","Currency","Exchange rate","Supplier Ref.","VAT total","VAT rate","Purchase nominal code","Paid date","Paid account nominal code"]);
   const accepted=validateExpenseForQuickFile(valid,config).row!;
   assert.equal(rowsToCsv([accepted]).split("\r\n")[0],QUICKFILE_HEADERS.join(","));
@@ -70,13 +70,28 @@ test("advisory provenance warnings do not block accounting export validation",()
 test("warning severity is preserved and export-specific evidence review is truthful",()=>{
   const advisory=validateExpenseForQuickFile({...valid,warnings:["supplier_country_missing","payment_evidence_missing"]},config);
   assert.deepEqual(advisory.canonicalWarnings,[{code:"supplier_country_missing",severity:"advisory"},{code:"payment_evidence_missing",severity:"advisory"}]);
-  const reviewRequired=validateExpenseForQuickFile({...valid,vat_treatment:"no_vat_shown",vat_rate:null,gbp_net_amount:null,gbp_vat_amount:null,warnings:["no_supplier_invoice"]},config);
+  const reviewRequired=validateExpenseForQuickFile({...valid,vat_treatment:"no_vat_shown",vat_rate:null,gbp_net_amount:null,gbp_vat_amount:null,supplier_document_review_status:"pending_review",warnings:["no_supplier_invoice"]},config);
   assert.ok(reviewRequired.reasons.includes("supplier_document_review_required"));
   assert.ok(!reviewRequired.reasons.some(reason=>reason.startsWith("critical_warning:")));
   assert.deepEqual(reviewRequired.canonicalWarnings,[{code:"no_supplier_invoice",severity:"review_required"}]);
-  assert.deepEqual(reviewRequired.blockerDetails,[{code:"supplier_document_review_required",expense_id:expenseId,message:"No VAT is being claimed where the treatment is no VAT shown, but the supporting document still requires founder review before accounting export."}]);
+  assert.deepEqual(reviewRequired.blockerDetails,[{code:"supplier_document_review_required",expense_id:expenseId,message:"The linked supplier document requires founder review before accounting export."}]);
   const critical=validateExpenseForQuickFile({...valid,warnings:["gross_net_vat_mismatch"]},config);
   assert.ok(critical.reasons.includes("critical_vat_warning:gross_net_vat_mismatch"));
+});
+
+test("supplier-document decisions remain separate from VAT treatment",()=>{
+  const noVat={...valid,vat_treatment:"no_vat_shown",vat_rate:"0.20",gbp_net_amount:null,gbp_vat_amount:"2.00",supplier_document_review_status:"supporting_document_accepted_no_vat_claim",evidence_files:[{id:"support",type:"supplier_invoice_no_vat"}],warnings:["no_supplier_invoice"]};
+  const accepted=validateExpenseForQuickFile(noVat,config);
+  assert.equal(accepted.disposition,"eligible");
+  assert.equal(accepted.row?.values["VAT total"],"0.00");
+  assert.equal(accepted.row?.values["VAT rate"],"0");
+  assert.equal(noVat.vat_treatment,"no_vat_shown");assert.equal(noVat.gbp_vat_amount,"2.00");assert.equal(noVat.vat_rate,"0.20");
+  for(const vat_treatment of ["standard_rated","reduced_rated"]){
+    const result=validateExpenseForQuickFile({...valid,vat_treatment,supplier_document_review_status:"supporting_document_accepted_no_vat_claim"},config);
+    assert.ok(result.reasons.includes("supplier_document_status_incompatible_with_vat_claim"));
+  }
+  assert.ok(validateExpenseForQuickFile({...noVat,supplier_document_review_status:"alternative_vat_evidence_requires_specialist_review"},config).reasons.includes("alternative_vat_evidence_specialist_review_required"));
+  assert.ok(validateExpenseForQuickFile({...noVat,supplier_document_review_status:"vat_invoice_confirmed"},config).reasons.includes("vat_invoice_evidence_required"));
 });
 
 test("VAT rate must agree with reviewed net and VAT within currency rounding tolerance",()=>{
@@ -124,12 +139,23 @@ test("validation is provider-neutral, deterministic and reports manual refund ha
   const adjustments=[adjustment];
   const first=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,adjustments) as never);
   const second=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(valid,adjustments) as never);
-  assert.equal(first.export_type,MTD_EXPORT_TYPE);assert.equal(first.eligible_row_count,1);assert.equal(first.blocked_row_count,0);
+  assert.equal(first.export_type,MTD_EXPORT_TYPE);assert.equal(first.eligible_row_count,1);assert.equal(first.blocked_row_count,0);assert.equal(first.excluded_row_count,0);
   assert.equal(first.adjustment_handling.strategy,"exclude_from_purchase_csv_and_require_manual_credit_note");assert.equal(first.adjustment_handling.manual_adjustment_count,1);
   const item=first.adjustment_handling.items[0];assert.equal(item.gross_amount,"0.99");assert.equal(item.gbp_gross_amount,"0.99");assert.equal(item.adjustment_date,"2026-06-03");assert.equal(item.supplier_reference,"REFUND-1");assert.equal(item.parent_supplier_name,"Supplier Ltd");assert.equal(item.effective_parent_reference,"INV-1");assert.equal(item.included_in_primary_csv,false);
   assert.equal(first.blocked_row_count,0);assert.equal(first.eligible_row_count,1);
   assert.equal("r2_object_key" in item,false);assert.equal("evidence_files" in item,false);assert.equal("filename" in item,false);
   assert.equal(first.source_ledger_fingerprint,second.source_ledger_fingerprint);
+});
+
+test("insufficient supplier evidence is explicitly excluded and changes the source fingerprint",async()=>{
+  const excluded={...valid,supplier_document_review_status:"insufficient_evidence_exclude_from_export"};
+  const result=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db(excluded) as never);
+  assert.equal(result.eligible_row_count,0);assert.equal(result.blocked_row_count,0);assert.equal(result.excluded_row_count,1);
+  assert.deepEqual(result.excluded_expense_ids,[expenseId]);
+  assert.deepEqual(result.exclusion_reasons[expenseId],["supplier_document_insufficient_evidence"]);
+  assert.deepEqual(result.rows,[]);
+  const pending=await validateAccountingExport({vat_period_id:periodId,profile:QUICKFILE_PROFILE},config,db({...valid,vat_treatment:"no_vat_shown",supplier_document_review_status:"pending_review"}) as never);
+  assert.notEqual(result.source_ledger_fingerprint,pending.source_ledger_fingerprint);
 });
 
 test("manual adjustment reference resolution prefers commercial references then stable expense identity",()=>{
