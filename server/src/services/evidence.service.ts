@@ -21,10 +21,16 @@ export const VAT_EVIDENCE_TYPES = [
   "order_confirmation","paypal_payment_receipt","card_bank_statement","credit_note",
   "refund_confirmation","import_vat_evidence","proof_of_payment","other_supporting_document"
 ] as const;
+export const FILING_EVIDENCE_PURPOSES = [
+  "hmrc_submitted_vat_return","vat_return_submission_confirmation",
+  "vat_return_filed_summary","vat_return_calculation_export",
+  "accounting_export_snapshot","hmrc_obligation_confirmation",
+  "other_vat_filing_support"
+] as const;
 export const LINKED_ENTITY_TYPES = [
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
   "report", "scenario", "hire", "document", "expense",
-  "expense_adjustment",
+  "expense_adjustment", "vat_filing",
   "rd_work_package", "rd_supplier", "rd_interaction", "rd_finding",
   "rd_action", "rd_rfq", "rd_quotation"
 ] as const;
@@ -92,12 +98,13 @@ export const validateEvidenceInput = (input: Input, partial = false) => {
   for (const field of ["last_reviewed_date", "next_review_date", "expiry_date", "document_date"] as const) if (field in input) output[field] = date(input[field], field);
   if ("change_reason" in input || !partial) output.change_reason = text(input.change_reason) ?? (partial ? "Updated evidence metadata" : "Created evidence metadata");
   if ("vat_evidence_type" in input) output.vat_evidence_type=enumValue(input.vat_evidence_type,"vat_evidence_type",VAT_EVIDENCE_TYPES);
+  if ("filing_evidence_purpose" in input) output.filing_evidence_purpose=enumValue(input.filing_evidence_purpose,"filing_evidence_purpose",FILING_EVIDENCE_PURPOSES);
   if ("supplier_name" in input) output.supplier_name=text(input.supplier_name);
   if ("supplier_reference" in input) output.supplier_reference=text(input.supplier_reference);
   return output;
 };
 
-const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "vat_evidence_type", "supplier_name", "supplier_reference", "change_reason"];
+const fields = ["title", "description", "evidence_type", "document_category", "source_organisation", "owner", "confidence", "verification_status", "document_status", "review_frequency", "last_reviewed_date", "next_review_date", "expiry_date", "document_date", "vat_evidence_type", "filing_evidence_purpose", "supplier_name", "supplier_reference", "change_reason"];
 const canonicalLinksLateral = `LEFT JOIN LATERAL (
   SELECT jsonb_agg(canonical_link ORDER BY canonical_link.created_at) AS links
   FROM finance_os.evidence_links canonical_link
@@ -171,6 +178,7 @@ const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>>
   scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",
   company: "finance_os.company", expense: "finance_os.expenses",
   expense_adjustment: "finance_os.expense_adjustments",
+  vat_filing: "finance_os.vat_filings",
   rd_work_package: "rd_lab.work_packages", rd_supplier: "rd_lab.suppliers",
   rd_interaction: "rd_lab.interactions", rd_finding: "rd_lab.technical_findings",
   rd_action: "rd_lab.action_items",
@@ -181,7 +189,11 @@ export const linkEvidence = async (evidenceId: string, input: Input, userId: str
   const entityType = enumValue(input.entity_type, "entity_type", LINKED_ENTITY_TYPES);
   const entityId = uuid(input.entity_id, "entity_id");
   const linkRelationship = relationship(input.relationship);
-  await getEvidence(evidenceId, db);
+  const evidence = await getEvidence(evidenceId, db);
+  if (entityType === "vat_filing") {
+    if (!evidence.filing_evidence_purpose) throw error("VAT filing evidence requires a controlled filing purpose", "filing_evidence_purpose_required", 422);
+    if (linkRelationship !== evidence.filing_evidence_purpose) throw error("VAT filing relationship must match the controlled filing purpose", "filing_evidence_purpose_mismatch", 422);
+  }
   const table = TARGET_TABLES[entityType];
   if (!table) throw error(`Entity type ${entityType} is reserved but has no canonical table`, "unsupported_evidence_entity", 422);
   const target = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [entityId]);
@@ -242,6 +254,15 @@ export const unlinkEvidence = async (evidenceId: string, linkId: string, db: Db 
   );
   const selectedLink = links.rows.find((link: { id: string }) => link.id === canonicalLinkId);
   if (!selectedLink) throw error("Evidence link not found", "evidence_link_not_found", 404);
+  if (selectedLink.entity_type === "vat_filing") {
+    await db.query(`DELETE FROM finance_os.evidence_links WHERE id = $1`, [canonicalLinkId]);
+    return {
+      link: selectedLink,
+      evidence_deleted: false,
+      remaining_link_count: links.rows.length - 1,
+      r2_object_key: null
+    };
+  }
   if (links.rows.length > 1) {
     await db.query(`DELETE FROM finance_os.evidence_links WHERE id = $1`, [canonicalLinkId]);
     return {

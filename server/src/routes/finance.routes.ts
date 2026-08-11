@@ -74,6 +74,7 @@ import {
   saveAccountingExportConfig
 } from "../services/accounting-export-config.service";
 import {
+  auditVatFilingEvidence,
   createVatFiling,
   getFinanceCompliance,
   listFinanceActions,
@@ -694,6 +695,7 @@ router.post(
         const duplicateLink = await findExistingUploadLink(existing.id, input, client);
         const link = duplicateLink ?? await createOptionalUploadLink(existing.id, input, req.dataRoomUser!.id, client);
         if (link && !duplicateLink) await auditFinanceAction("evidence.linked", "evidence", existing.id, req.dataRoomUser!.id, client);
+        if (link && !duplicateLink && input.linkedEntityType === "vat_filing") await auditVatFilingEvidence("vat_filing_evidence_linked",input.linkedEntityId!,existing.id,input.filingEvidencePurpose!,req.dataRoomUser!.id,client);
         await auditFinanceAction("evidence.reused", "evidence", existing.id, req.dataRoomUser!.id, client);
         await client.query("COMMIT");
         return res.status(200).json(jsonOk({ evidence: publicEvidence(existing), link, evidence_reused: true, link_created: Boolean(link && !duplicateLink), duplicate_link: Boolean(duplicateLink) }));
@@ -704,6 +706,7 @@ router.post(
       uploadedObjectKey = storage.objectKey;
       const evidence = await finishUploadedEvidenceRecord(created.id, storage.objectKey, client);
       const link = await createOptionalUploadLink(created.id, input, req.dataRoomUser!.id, client);
+      if (link && input.linkedEntityType === "vat_filing") await auditVatFilingEvidence("vat_filing_evidence_linked",input.linkedEntityId!,created.id,input.filingEvidencePurpose!,req.dataRoomUser!.id,client);
       await auditFinanceAction("evidence.uploaded","evidence",created.id,req.dataRoomUser!.id,client);
       await client.query("COMMIT");
       return res.status(201).json(jsonOk({ evidence: publicEvidence(evidence), link, evidence_reused: false, link_created: Boolean(link), duplicate_link: false }));
@@ -783,6 +786,10 @@ router.post(
       req.body ?? {},
       req.dataRoomUser!.id
     );
+    if (link.entity_type === "vat_filing") {
+      const evidence = await getEvidence(getParam(req.params.id));
+      await auditVatFilingEvidence("vat_filing_evidence_linked",link.entity_id,evidence.id,evidence.filing_evidence_purpose,req.dataRoomUser!.id);
+    }
     await auditFinanceAction("evidence.linked","evidence",getParam(req.params.id),req.dataRoomUser!.id);
     return res.status(201).json(jsonOk({ link }));
   })
@@ -859,10 +866,14 @@ router.delete(
         getParam(req.params.linkId),
         client
       );
+      if (result.link.entity_type === "vat_filing") {
+        const evidence = await getEvidence(getParam(req.params.id),client);
+        await auditVatFilingEvidence("vat_filing_evidence_unlinked",result.link.entity_id,evidence.id,evidence.filing_evidence_purpose,req.dataRoomUser!.id,client);
+      }
       await auditFinanceAction("evidence.unlinked","evidence",getParam(req.params.id),req.dataRoomUser!.id,client);
       if (result.r2_object_key) await deleteFromR2(result.r2_object_key);
       await client.query("COMMIT");
-      return res.json(jsonOk(result));
+      return res.json(jsonOk({link:result.link,evidence_deleted:result.evidence_deleted,remaining_link_count:result.remaining_link_count}));
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

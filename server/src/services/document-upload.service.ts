@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import path from "path";
 import { PoolClient } from "pg";
-import { DOCUMENT_CATEGORIES, LINKED_ENTITY_TYPES, VAT_EVIDENCE_TYPES, linkEvidence } from "./evidence.service";
+import { DOCUMENT_CATEGORIES, FILING_EVIDENCE_PURPOSES, LINKED_ENTITY_TYPES, VAT_EVIDENCE_TYPES, linkEvidence } from "./evidence.service";
 
 type Input = Record<string, unknown>;
 type Db = Pick<PoolClient, "query">;
@@ -74,6 +74,7 @@ export const parseDocumentUploadInput = (input: Input) => {
     relationship: supplied === 3 ? required(input.relationship, "relationship") : null
     ,vatEvidenceType:input.vat_evidence_type ? required(input.vat_evidence_type,"vat_evidence_type") : null
     ,supplierReference:optional(input.supplier_reference)
+    ,filingEvidencePurpose:input.filing_evidence_purpose ? required(input.filing_evidence_purpose,"filing_evidence_purpose") : null
   };
 };
 
@@ -112,9 +113,12 @@ export const buildDocumentStorage = (category: typeof DOCUMENT_CATEGORIES[number
 
 export const createUploadedEvidenceRecord = async (input: ReturnType<typeof parseDocumentUploadInput>, file: Express.Multer.File, userId: string, db: Db) => {
   if(input.vatEvidenceType&&!VAT_EVIDENCE_TYPES.includes(input.vatEvidenceType as typeof VAT_EVIDENCE_TYPES[number]))throw badRequest("Invalid vat_evidence_type");
+  if(input.filingEvidencePurpose&&!FILING_EVIDENCE_PURPOSES.includes(input.filingEvidencePurpose as typeof FILING_EVIDENCE_PURPOSES[number]))throw badRequest("Invalid filing_evidence_purpose");
+  if(input.linkedEntityType==="vat_filing"&&!input.filingEvidencePurpose)throw badRequest("filing_evidence_purpose is required for VAT filing evidence");
+  if(input.filingEvidencePurpose&&input.linkedEntityType!=="vat_filing")throw badRequest("filing_evidence_purpose requires a VAT filing link");
   const inserted = await db.query(
-    `INSERT INTO finance_os.evidence (title, description, evidence_type, document_category, source_organisation, document_date, original_filename, mime_type, file_size, checksum, vat_evidence_type, supplier_reference, created_by, updated_by, storage_provider, signed_url_available, verification_status, document_status, file_version) VALUES ($1, $2, 'document', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 'r2', true, 'Unknown', 'Active', 1) RETURNING *`,
-    [input.title, input.description, input.documentCategory, input.sourceOrganisation, input.documentDate, file.originalname, file.mimetype || "application/octet-stream", file.size, crypto.createHash("sha256").update(file.buffer).digest("hex"),input.vatEvidenceType,input.supplierReference,userId]
+    `INSERT INTO finance_os.evidence (title, description, evidence_type, document_category, source_organisation, document_date, original_filename, mime_type, file_size, checksum, vat_evidence_type, supplier_reference, filing_evidence_purpose, created_by, updated_by, storage_provider, signed_url_available, verification_status, document_status, file_version) VALUES ($1, $2, 'document', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, 'r2', true, 'Unknown', 'Active', 1) RETURNING *`,
+    [input.title, input.description, input.documentCategory, input.sourceOrganisation, input.documentDate, file.originalname, file.mimetype || "application/octet-stream", file.size, crypto.createHash("sha256").update(file.buffer).digest("hex"),input.vatEvidenceType,input.supplierReference,input.filingEvidencePurpose,userId]
   );
   return inserted.rows[0];
 };
@@ -145,6 +149,8 @@ export const createOptionalUploadLink = async (evidenceId: string, input: Return
     relationship: input.relationship,
     change_reason: input.linkedEntityType === "expense"
       ? "Linked during expense evidence upload"
+      : input.linkedEntityType === "vat_filing"
+        ? "Linked during VAT filing evidence upload"
       : "Linked during document upload"
   }, userId, db);
 };
