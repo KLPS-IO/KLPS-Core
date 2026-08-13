@@ -19,6 +19,7 @@ export const ensureUserProfile = async ({
       country,
       city,
       cohort_version,
+      analytics_population,
       created_at
     )
     VALUES (
@@ -28,6 +29,7 @@ export const ensureUserProfile = async ({
       'United Kingdom',
       'Birmingham',
       $2,
+      'genuine_beta',
       NOW()
     )
     ON CONFLICT (id) DO NOTHING

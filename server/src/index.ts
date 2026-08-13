@@ -13,6 +13,7 @@ import growthRoutes from "./growth/growth.routes";
 import { getSocialStartupStatus } from "./growth/social/social.registry";
 import { getMetaConfigurationDiagnostics } from "./growth/social/meta.diagnostics";
 import rdLabRoutes from "./rd-lab/rd-lab.routes";
+import textileLabRoutes from "./textile-lab/textile-lab.routes";
 import {
   getSessionUser,
   hasAcceptedCurrentNda,
@@ -216,6 +217,7 @@ app.use("/api/data-room", dataRoomRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/growth", growthRoutes);
 app.use("/api/rd-lab", rdLabRoutes);
+app.use("/api/textile-lab", textileLabRoutes);
 app.use("/api/research", researchRoutes);
 
 app.get("/api/auth/me", async (req, res) => {

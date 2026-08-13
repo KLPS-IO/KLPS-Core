@@ -483,8 +483,9 @@ router.get("/word-cloud", async (req, res) => {
       await pool.query<SignalRow>(`
 
         SELECT response_value
-        FROM lema.signals
+        FROM lema.signals signal
         WHERE response_value IS NOT NULL
+        AND EXISTS(SELECT 1 FROM lema.daily_sessions session WHERE session.user_id=signal.user_id AND session.day_number=signal.day_number AND session.analytics_eligible=true)
 
       `);
 
@@ -496,8 +497,9 @@ router.get("/word-cloud", async (req, res) => {
       await pool.query<SignalRow>(`
 
         SELECT response_value
-        FROM lema.signals
+        FROM lema.signals signal
         WHERE response_value IS NOT NULL
+        AND EXISTS(SELECT 1 FROM lema.daily_sessions session WHERE session.user_id=signal.user_id AND session.day_number=signal.day_number AND session.analytics_eligible=true)
         AND created_at >= NOW() - INTERVAL '7 days'
 
       `);
