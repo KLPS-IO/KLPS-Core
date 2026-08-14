@@ -151,7 +151,7 @@ export const setSessionCookie = (
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     "HttpOnly",
     "Path=/",
-    "SameSite=None",
+    secure ? "SameSite=None" : "SameSite=Lax",
     `Expires=${expiresAt.toUTCString()}`
   ];
 
