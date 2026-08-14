@@ -20,7 +20,9 @@ export async function overview(db:Db=pool){
 
 export async function registerDevice(input:Record<string,unknown>,actor:string,db:Db=pool){
   const values=[text(input.device_identifier,"device_identifier"),text(input.display_name,"display_name"),text(input.hardware_type,"hardware_type"),text(input.hardware_model,"hardware_model"),input.firmware_version?text(input.firmware_version,"firmware_version"):null,text(input.transport,"transport"),actor];
-  const result=await db.query(`INSERT INTO textile_lab.devices(device_identifier,display_name,hardware_type,hardware_model,firmware_version,transport,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,values);return result.rows[0];
+  const result=await db.query(`INSERT INTO textile_lab.devices(device_identifier,display_name,hardware_type,hardware_model,firmware_version,transport,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$7)
+    ON CONFLICT(device_identifier) DO UPDATE SET display_name=EXCLUDED.display_name,hardware_type=EXCLUDED.hardware_type,hardware_model=EXCLUDED.hardware_model,firmware_version=EXCLUDED.firmware_version,transport=EXCLUDED.transport,updated_at=now(),updated_by=EXCLUDED.updated_by
+    RETURNING *`,values);return result.rows[0];
 }
 
 export async function startTestSession(input:Record<string,unknown>,actor:string,db:Db=pool){
