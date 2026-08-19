@@ -82,6 +82,11 @@ import {
   refreshFinanceActions,
   updateFinanceAction
 } from "../services/finance-compliance.service";
+import {
+  importMonzoCsv,
+  listBankImports,
+  listBankTransactions
+} from "../services/bank-import.service";
 
 const router = express.Router();
 
@@ -96,6 +101,7 @@ const documentUpload = multer({
     parts: 22
   }
 });
+const bankCsvUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024,files:1,fields:4,parts:5}});
 
 const jsonOk = (
   data: Record<string, unknown> = {}
@@ -241,6 +247,13 @@ const publicEvidence = (row: Record<string, unknown>) => {
 };
 
 router.get("/vat-periods",asyncHandler(async(_req,res)=>res.json(jsonOk({vat_periods:await listVatPeriods()}))));
+router.get("/bank-imports",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({imports:await listBankImports()}))));
+router.get("/bank-transactions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({transactions:await listBankTransactions()}))));
+router.post("/bank-imports/monzo-csv",requireFinanceWrite,bankCsvUpload.single("file"),asyncHandler(async(req,res)=>{
+  if(!req.file)throw Object.assign(new Error("A Monzo CSV file is required"),{statusCode:400,code:"bank_csv_required"});
+  const result=await importMonzoCsv({file:req.file.buffer,filename:req.file.originalname,providerEnvironment:req.body?.provider_environment,accountLabel:req.body?.account_label},req.dataRoomUser!.id);
+  return res.status(result.duplicate_file?200:201).json(jsonOk({import:result}));
+}));
 router.get("/compliance",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({compliance:await getFinanceCompliance()}))));
 router.get("/actions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({actions:await listFinanceActions()}))));
 router.post("/actions/refresh",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({summary:await refreshFinanceActions(req.dataRoomUser!.id)}))));

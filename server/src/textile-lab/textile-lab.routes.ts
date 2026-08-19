@@ -1,6 +1,6 @@
 import express from "express";
 import { DataRoomRequest,requireDataRoomAuth,requireAdmin } from "../services/data-room.service";
-import { appendRawReadings,completeTestSession,listDevices,listRawReadings,listSessions,listSpecimens,overview,registerDevice,startTestSession } from "./textile-lab.service";
+import { addReferenceObservation,appendRawReadings,calculateDerivedResults,completeCalibrationRun,completeTestSession,createAlgorithmVersion,createCalibrationRun,createChannel,createProtocol,engineeringMetrics,listCalibrationRuns,listChannels,listDerivedResults,listDevices,listProtocols,listRawReadings,listSessions,listSpecimens,overview,registerDevice,reviewDerivedResult,startTestSession } from "./textile-lab.service";
 
 const router=express.Router();
 const asyncHandler=(fn:(req:DataRoomRequest,res:express.Response)=>Promise<unknown>)=>(req:express.Request,res:express.Response,next:express.NextFunction)=>Promise.resolve(fn(req as DataRoomRequest,res)).catch(next);
@@ -10,6 +10,15 @@ router.get("/devices",asyncHandler(async(_req,res)=>res.json({status:"success",d
 router.post("/devices",asyncHandler(async(req,res)=>res.status(201).json({status:"success",device:await registerDevice(req.body??{},req.dataRoomUser!.id)})));
 router.get("/specimens",asyncHandler(async(_req,res)=>res.json({status:"success",specimens:await listSpecimens()})));
 router.get("/sessions",asyncHandler(async(_req,res)=>res.json({status:"success",sessions:await listSessions()})));
+router.get("/foundation",asyncHandler(async(_req,res)=>res.json({status:"success",channels:await listChannels(),protocols:await listProtocols(),calibration_runs:await listCalibrationRuns(),derived_results:await listDerivedResults(),metrics:await engineeringMetrics()})));
+router.post("/channels",asyncHandler(async(req,res)=>res.status(201).json({status:"success",channel:await createChannel(req.body??{},req.dataRoomUser!.id)})));
+router.post("/protocols",asyncHandler(async(req,res)=>res.status(201).json({status:"success",protocol:await createProtocol(req.body??{},req.dataRoomUser!.id)})));
+router.post("/calibration-runs",asyncHandler(async(req,res)=>res.status(201).json({status:"success",calibration_run:await createCalibrationRun(req.body??{},req.dataRoomUser!.id)})));
+router.post("/calibration-runs/:id/reference-observations",asyncHandler(async(req,res)=>res.status(201).json({status:"success",reference_observation:await addReferenceObservation(req.params.id,req.body??{},req.dataRoomUser!.id)})));
+router.post("/calibration-runs/:id/complete",asyncHandler(async(req,res)=>res.json({status:"success",calibration_run:await completeCalibrationRun(req.params.id,req.body??{})})));
+router.post("/algorithms",asyncHandler(async(req,res)=>res.status(201).json({status:"success",algorithm:await createAlgorithmVersion(req.body??{},req.dataRoomUser!.id)})));
+router.post("/calibration-runs/:id/calculate",asyncHandler(async(req,res)=>res.status(201).json({status:"success",derived_results:await calculateDerivedResults(req.params.id,req.body?.algorithm_version_id,req.dataRoomUser!.id)})));
+router.post("/derived-results/:id/reviews",asyncHandler(async(req,res)=>res.status(201).json({status:"success",review:await reviewDerivedResult(req.params.id,req.body??{},req.dataRoomUser!.id)})));
 router.post("/sessions",asyncHandler(async(req,res)=>res.status(201).json({status:"success",session:await startTestSession(req.body??{},req.dataRoomUser!.id)})));
 router.post("/sessions/:id/complete",asyncHandler(async(req,res)=>res.json({status:"success",session:await completeTestSession(req.params.id,req.dataRoomUser!.id)})));
 router.get("/sessions/:id/readings",asyncHandler(async(req,res)=>res.json({status:"success",readings:await listRawReadings(req.params.id)})));

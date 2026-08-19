@@ -33,6 +33,7 @@ export const LINKED_ENTITY_TYPES = [
   "expense_adjustment", "vat_filing",
   "rd_work_package", "rd_supplier", "rd_interaction", "rd_finding",
   "rd_action", "rd_rfq", "rd_quotation"
+  ,"textile_protocol","textile_session","textile_calibration_run","textile_derived_result"
 ] as const;
 
 type Db = Pick<PoolClient, "query">;
@@ -183,6 +184,8 @@ const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>>
   rd_interaction: "rd_lab.interactions", rd_finding: "rd_lab.technical_findings",
   rd_action: "rd_lab.action_items",
   rd_rfq: "rd_lab.rfqs", rd_quotation: "rd_lab.quotations"
+  ,textile_protocol:"textile_lab.experiment_protocols",textile_session:"textile_lab.test_sessions",
+  textile_calibration_run:"textile_lab.calibration_runs",textile_derived_result:"textile_lab.derived_results"
 };
 
 export const linkEvidence = async (evidenceId: string, input: Input, userId: string, db: Db = pool) => {
