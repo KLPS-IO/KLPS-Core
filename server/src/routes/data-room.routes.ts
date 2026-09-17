@@ -31,6 +31,7 @@ import {
 } from "../services/email.service";
 import {
   createR2PresignedUrl,
+  readFromR2,
   isR2Configured
 } from "../services/r2.service";
 import {
@@ -576,7 +577,7 @@ router.get(
         CASE WHEN e.file_version IS NULL THEN d.version ELSE e.file_version::text END AS version,
         d.uploaded_at,
         d.updated_at,
-        d.access_level,
+        CASE WHEN EXISTS (SELECT 1 FROM finance_os.evidence private_e WHERE private_e.founder_only AND (private_e.id=d.evidence_id OR private_e.r2_object_key=d.storage_path)) THEN 'founder_only' ELSE d.access_level END AS access_level,
         CASE WHEN e.id IS NULL THEN d.storage_provider ELSE e.storage_provider END AS storage_provider,
         COALESCE(e.mime_type, d.content_type) AS content_type,
         d.sort_order,
@@ -627,9 +628,9 @@ router.post(
 
     const result = await pool.query(
       `
-      SELECT id, access_level, active
-      FROM data_room.documents
-      WHERE id = $1
+      SELECT d.id, CASE WHEN EXISTS (SELECT 1 FROM finance_os.evidence private_e WHERE private_e.founder_only AND (private_e.id=d.evidence_id OR private_e.r2_object_key=d.storage_path)) THEN 'founder_only' ELSE d.access_level END AS access_level, d.active
+      FROM data_room.documents d
+      WHERE d.id = $1
       LIMIT 1
       `,
       [req.params.id]
@@ -707,7 +708,7 @@ router.get(
         COALESCE(e.original_filename, d.filename) AS filename,
         COALESCE(e.r2_object_key, d.storage_path) AS storage_path,
         CASE WHEN e.id IS NULL THEN d.storage_provider ELSE e.storage_provider END AS storage_provider,
-        d.access_level,
+        CASE WHEN EXISTS (SELECT 1 FROM finance_os.evidence private_e WHERE private_e.founder_only AND (private_e.id=d.evidence_id OR private_e.r2_object_key=d.storage_path)) THEN 'founder_only' ELSE d.access_level END AS access_level,
         d.active,
         u.email,
         u.role,
@@ -743,6 +744,23 @@ router.get(
         code: "document_not_found",
         message: "Document not found"
       });
+    }
+
+    // A signed link does not delegate access to restricted corporate evidence.
+    if (row.access_level === 'founder_only' || row.access_level === 'admin_only' || row.access_level === 'legal_only') {
+      const session = await getSessionUser(req);
+      if (!session || session.user.id !== userId || session.user.role !== 'founder_admin') {
+        return res.status(404).json({status:'error',code:'document_not_found',message:'Document not found'});
+      }
+      res.setHeader('Cache-Control', 'private, no-store');
+      if (row.storage_provider === 'r2') {
+        const file = await readFromR2(row.storage_path);
+        res.setHeader('Content-Type', file.contentType);
+        const filename = String(row.filename).replace(/[\r\n"]/g, '');
+        res.setHeader('Content-Disposition', `${action === 'download' ? 'attachment' : 'inline'}; filename="${filename}"`);
+        await logAccessEvent({req,user:session.user,eventType:action === 'download' ? 'document_downloaded' : 'document_viewed',documentId:row.id,metadata:{action,restricted:true}});
+        return res.send(file.body);
+      }
     }
 
     await logAccessEvent({

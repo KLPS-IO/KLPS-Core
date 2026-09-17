@@ -1,4 +1,6 @@
 import express from "express";
+import { requirePrivateFinance } from '../middleware/finance-private';
+import { addActivity, getReadiness, initialiseReadiness, saveScenario, updateRequirement, updateEngagement } from '../services/fundraising-readiness.service';
 import multer from "multer";
 import {
   DataRoomRequest,
@@ -233,8 +235,25 @@ const assumptionUpdateFields = [
 router.use(
   requireDataRoomAuth,
   requireAuthorised,
-  ndaMiddleware
+  ndaMiddleware,
+  requirePrivateFinance
 );
+router.get('/readiness', asyncHandler(async (_req,res) => res.json(jsonOk(await getReadiness()))));
+const readinessWrite = (operation: (req: DataRoomRequest, client: import('pg').PoolClient) => Promise<unknown>) => asyncHandler(async (req,res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(req,client);
+    await client.query('COMMIT');
+    return res.json(jsonOk({result}));
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+});
+router.post('/readiness', readinessWrite((req,db) => initialiseReadiness(req.dataRoomUser!.id,db)));
+router.patch('/readiness/:id', readinessWrite((req,db) => updateEngagement(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
+router.patch('/readiness/requirements/:id', readinessWrite((req,db) => updateRequirement(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
+router.post('/readiness/:id/activity', readinessWrite((req,db) => addActivity(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
+router.post('/readiness/:id/scenarios', readinessWrite((req,db) => saveScenario(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
 const publicEvidence = (row: Record<string, unknown>) => {
   const { r2_object_key: privateObjectKey, ...safe } = row;
   return { ...safe, has_r2_object: Boolean(privateObjectKey) };
@@ -742,6 +761,10 @@ router.post(
     }
     const expiresSeconds = 300;
     await auditFinanceAction(action === "download" ? "evidence.downloaded" : "evidence.viewed","evidence",evidence.id,req.dataRoomUser!.id);
+    if (evidence.founder_only) {
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.json(jsonOk({ action, authenticated_content_path: `/api/finance/evidence/${evidence.id}/content`, expires_at: new Date(Date.now() + expiresSeconds * 1000).toISOString() }));
+    }
     const filename = String(evidence.r2_object_key).split("/").pop();
     const signedUrl = createR2PresignedUrl({
       method: "GET",
