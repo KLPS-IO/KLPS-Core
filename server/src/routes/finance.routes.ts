@@ -1,3 +1,4 @@
+import { getOutreach, recordUpdate } from '../services/fundraising-outreach.service';
 import express from "express";
 import { requirePrivateFinance } from '../middleware/finance-private';
 import { addActivity, getReadiness, initialiseReadiness, saveScenario, updateRequirement, updateEngagement } from '../services/fundraising-readiness.service';
@@ -249,6 +250,8 @@ const readinessWrite = (operation: (req: DataRoomRequest, client: import('pg').P
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 });
+router.get('/outreach', asyncHandler(async (_req,res) => res.json(jsonOk(await getOutreach()))));
+router.post('/outreach/:id/updates', readinessWrite((req,db) => recordUpdate(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
 router.post('/readiness', readinessWrite((req,db) => initialiseReadiness(req.dataRoomUser!.id,db)));
 router.patch('/readiness/:id', readinessWrite((req,db) => updateEngagement(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
 router.patch('/readiness/requirements/:id', readinessWrite((req,db) => updateRequirement(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
