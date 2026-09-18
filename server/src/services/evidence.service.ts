@@ -28,6 +28,7 @@ export const FILING_EVIDENCE_PURPOSES = [
   "other_vat_filing_support"
 ] as const;
 export const LINKED_ENTITY_TYPES = [
+  "credit_facility","credit_term_version","credit_statement","bank_balance_observation","bank_account","bank_sync_run","bank_transaction",
   "assumption", "product", "decision", "risk", "company", "funding", "kpi",
   "report", "scenario", "hire", "document", "expense",
   "expense_adjustment", "vat_filing",
@@ -173,6 +174,7 @@ export const updateEvidence = async (id: string, input: Input, userId: string, d
 };
 
 const TARGET_TABLES: Partial<Record<typeof LINKED_ENTITY_TYPES[number], string>> = {
+  credit_facility:"finance_os.credit_facilities",credit_term_version:"finance_os.credit_term_versions",credit_statement:"finance_os.credit_statements",bank_balance_observation:"finance_os.bank_balance_observations",bank_account:"finance_os.bank_accounts",bank_sync_run:"finance_os.bank_sync_runs",bank_transaction:"finance_os.bank_transactions",
   assumption: "finance_os.assumptions", product: "finance_os.products", decision: "finance_os.decisions",
   risk: "finance_os.risks", funding: "finance_os.funding", report: "finance_os.reports",
   scenario: "finance_os.scenarios", hire: "finance_os.hires", document: "finance_os.documents",

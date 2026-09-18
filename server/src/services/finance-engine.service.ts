@@ -1,3 +1,4 @@
+import { canonicalFinance } from "./finance-canonical.service";
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
 
@@ -10,42 +11,6 @@ type ScenarioRow = {
   key: string;
   name: string;
 };
-
-const FINANCE_FIELDS = [
-  "id",
-  "scenario_id",
-  "name",
-  "category",
-  "value",
-  "unit",
-  "confidence_score",
-  "confidence_level",
-  "source",
-  "owner",
-  "status",
-  "notes",
-  "linked_metrics",
-  "evidence_summary",
-  "created_at",
-  "updated_at",
-  "created_by",
-  "updated_by",
-  "version",
-  "change_reason"
-].join(", ");
-
-const toNumber = (value: unknown) => {
-  if (value === null || value === undefined) return 0;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const slugify = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
 
 const getClient = (client?: PoolClient) =>
   client ?? pool;
@@ -93,156 +58,7 @@ export const getScenarioByKey = async (
   return created.rows[0] as ScenarioRow;
 };
 
-export const calculateFinancialModel = async ({
-  scenarioKey = "base",
-  client
-}: {
-  scenarioKey?: string;
-  client?: PoolClient;
-}) => {
-  const db = getClient(client);
-  const scenario =
-    await getScenarioByKey(scenarioKey, client);
-
-  const assumptions = await db.query(
-    `
-    SELECT ${FINANCE_FIELDS}
-    FROM finance_os.assumptions
-    WHERE
-      (scenario_id = $1 OR scenario_id IS NULL)
-      AND status <> 'deprecated'
-    ORDER BY category ASC, name ASC
-    `,
-    [scenario.id]
-  );
-
-  const products = await db.query(
-    `
-    SELECT price, unit_cost, metadata
-    FROM finance_os.products
-    WHERE scenario_id = $1 OR scenario_id IS NULL
-    `,
-    [scenario.id]
-  );
-
-  const hires = await db.query(
-    `
-    SELECT annual_salary, status
-    FROM finance_os.hires
-    WHERE
-      (scenario_id = $1 OR scenario_id IS NULL)
-      AND status <> 'deferred'
-    `,
-    [scenario.id]
-  );
-
-  const funding = await db.query(
-    `
-    SELECT amount, status
-    FROM finance_os.funding
-    WHERE
-      (scenario_id = $1 OR scenario_id IS NULL)
-      AND status <> 'withdrawn'
-    `,
-    [scenario.id]
-  );
-
-  const assumptionsByMetric =
-    assumptions.rows.reduce<Record<string, number>>(
-      (metrics, row) => {
-        metrics[slugify(row.name)] = toNumber(row.value);
-        metrics[`${slugify(row.category)}_total`] =
-          (metrics[`${slugify(row.category)}_total`] ?? 0) +
-          toNumber(row.value);
-        return metrics;
-      },
-      {}
-    );
-
-  const productRevenue =
-    products.rows.reduce(
-      (total, row) =>
-        total +
-        toNumber(row.price) *
-          toNumber(row.metadata?.annual_units ?? row.metadata?.units ?? 0),
-      0
-    );
-
-  const productCosts =
-    products.rows.reduce(
-      (total, row) =>
-        total +
-        toNumber(row.unit_cost) *
-          toNumber(row.metadata?.annual_units ?? row.metadata?.units ?? 0),
-      0
-    );
-
-  const payroll =
-    hires.rows.reduce(
-      (total, row) => total + toNumber(row.annual_salary),
-      0
-    );
-
-  const plannedFunding =
-    funding.rows.reduce(
-      (total, row) => total + toNumber(row.amount),
-      0
-    );
-
-  const assumptionRevenue =
-    assumptions.rows
-      .filter(row => /revenue|sales|income/i.test(row.category))
-      .reduce((total, row) => total + toNumber(row.value), 0);
-
-  const assumptionCosts =
-    assumptions.rows
-      .filter(row => /cost|expense|payroll|manufacturing|opex/i.test(row.category))
-      .reduce((total, row) => total + toNumber(row.value), 0);
-
-  const revenue = assumptionRevenue + productRevenue;
-  const costs = assumptionCosts + productCosts + payroll;
-  const grossProfit = revenue - productCosts;
-  const netBurn = Math.max(costs - revenue, 0);
-  const runwayMonths =
-    netBurn > 0
-      ? Math.round((plannedFunding / (netBurn / 12)) * 10) / 10
-      : null;
-
-  const averageConfidence =
-    assumptions.rows.length > 0
-      ? assumptions.rows.reduce(
-          (total, row) => total + toNumber(row.confidence_score),
-          0
-        ) / assumptions.rows.length
-      : null;
-
-  return {
-    scenario: {
-      id: scenario.id,
-      key: scenario.key,
-      name: scenario.name
-    },
-    inputs: {
-      assumptions: assumptions.rows,
-      products: products.rows.length,
-      hires: hires.rows.length,
-      funding: funding.rows.length
-    },
-    outputs: {
-      revenue,
-      costs,
-      gross_profit: grossProfit,
-      net_burn: netBurn,
-      planned_funding: plannedFunding,
-      runway_months: runwayMonths,
-      average_confidence:
-        averageConfidence === null
-          ? null
-          : Math.round(averageConfidence * 100) / 100,
-      metrics: assumptionsByMetric
-    }
-  };
-};
+export const calculateFinancialModel = async ({scenarioKey="base",client}:{scenarioKey?:string;client?:PoolClient}) => canonicalFinance(scenarioKey,client??pool);
 
 export const persistFinancialModelSnapshot = async ({
   scenarioKey = "base",
@@ -252,8 +68,10 @@ export const persistFinancialModelSnapshot = async ({
   scenarioKey?: string;
   userId: string;
   client?: PoolClient;
-}) => {
+}): Promise<any> => {
+  if(!client){const transaction=await pool.connect();try{await transaction.query('BEGIN');const result=await persistFinancialModelSnapshot({scenarioKey,userId,client:transaction});await transaction.query('COMMIT');return result;}catch(e){await transaction.query('ROLLBACK');throw e;}finally{transaction.release();}}
   const db = getClient(client);
+  await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [scenarioKey]);
   const model =
     await calculateFinancialModel({
       scenarioKey,
@@ -308,28 +126,7 @@ export const getLatestFinancialModel = async ({
   scenarioKey?: string;
   userId: string;
 }) => {
-  const latest = await pool.query(
-    `
-    SELECT id, scenario_id, scenario_key, model_version, calculation_inputs, outputs, created_at, created_by
-    FROM finance_os.model_snapshots
-    WHERE scenario_key = $1
-    ORDER BY model_version DESC
-    LIMIT 1
-    `,
-    [scenarioKey]
-  );
-
-  if (latest.rows[0]) {
-    return {
-      snapshot: latest.rows[0],
-      outputs: latest.rows[0].outputs
-    };
-  }
-
-  return persistFinancialModelSnapshot({
-    scenarioKey,
-    userId
-  });
+  return persistFinancialModelSnapshot({scenarioKey,userId});
 };
 
 export const logFinanceEvent = async ({

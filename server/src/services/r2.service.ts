@@ -1,3 +1,4 @@
+import {localEvidenceRoot,putLocalEvidence,readLocalEvidence,deleteLocalEvidence} from "./local-evidence-storage";
 import crypto from "crypto";
 import {
   S3Client,
@@ -131,7 +132,7 @@ const getR2Client = () => {
 };
 
 export const isR2Configured = () =>
-  getR2Config() !== null;
+  localEvidenceRoot() !== null || getR2Config() !== null;
 
 export const createR2PresignedUrl = ({
   method,
@@ -139,6 +140,7 @@ export const createR2PresignedUrl = ({
   expiresSeconds = 300,
   responseFilename
 }: PresignInput) => {
+  if(localEvidenceRoot())throw new Error("Local evidence requires authenticated content access");
   const config =
     getR2Config();
 
@@ -264,6 +266,7 @@ export const uploadToR2 = async (
   buffer: Buffer,
   contentType: string
 ) => {
+  if(localEvidenceRoot())return putLocalEvidence(objectKey,buffer);
   const config =
     getR2Config();
 
@@ -296,6 +299,7 @@ export const uploadToR2 = async (
 };
 
 export const deleteFromR2 = async (objectKey: string) => {
+  if(localEvidenceRoot())return deleteLocalEvidence(objectKey);
   const config = getR2Config();
   if (!config) throw new Error("Cloudflare R2 is not configured");
   await getR2Client().send(new DeleteObjectCommand({
@@ -305,6 +309,7 @@ export const deleteFromR2 = async (objectKey: string) => {
 };
 
 export const readFromR2 = async (objectKey: string) => {
+  if(localEvidenceRoot())return readLocalEvidence(objectKey);
   const config = getR2Config();
   if (!config) throw new Error("Cloudflare R2 is not configured");
   const result = await getR2Client().send(new GetObjectCommand({

@@ -1,3 +1,7 @@
+import {canonicalFinance} from '../services/finance-canonical.service';
+import {calculateCreditScenario} from '../services/credit-engine';
+import {matchBankTransfer} from '../services/bank-import.service';
+import { importMonzoCsv, listBankImports, listBankTransactions } from "../services/bank-import.service";
 import { getOutreach, recordUpdate } from '../services/fundraising-outreach.service';
 import express from "express";
 import { requirePrivateFinance } from '../middleware/finance-private';
@@ -87,6 +91,7 @@ import {
 } from "../services/finance-compliance.service";
 
 const router = express.Router();
+const bankCsvUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024,files:1,fields:6,parts:7}});
 
 const documentUpload = multer({
   storage: multer.memoryStorage(),
@@ -263,6 +268,30 @@ const publicEvidence = (row: Record<string, unknown>) => {
 };
 
 router.get("/vat-periods",asyncHandler(async(_req,res)=>res.json(jsonOk({vat_periods:await listVatPeriods()}))));
+const bankOffset=(value:unknown)=>{const n=Number(value??0);if(!Number.isSafeInteger(n)||n<0)throw Object.assign(new Error('Invalid pagination offset'),{statusCode:400});return n;};
+router.get('/canonical-model',asyncHandler(async(req,res)=>{res.setHeader('Cache-Control','private, no-store');res.json(jsonOk({model:await canonicalFinance(String(req.query.scenario??'base'))}));}));
+router.post('/credit-scenarios',requireFinanceWrite,asyncHandler(async(req,res)=>{
+ const terms=(await pool.query(`SELECT t.*,f.provider FROM finance_os.credit_term_versions t JOIN finance_os.credit_facilities f ON f.id=t.facility_id WHERE f.id=$1 ORDER BY t.version DESC LIMIT 1`,[req.body?.facility_id??null])).rows[0];
+ const rule=terms?.terms?.minimum_payment_rule;
+ if(!terms||!['extracted','reviewed'].includes(terms.review_status)||rule?.percentage!=='0.10'||rule?.floor_gbp!=='100'||rule?.cap_at_total_owing!==true){res.json(jsonOk({projection:{status:'blocked',missing:['Supported evidenced facility term version required'],assumptions:{},financial_action:false}}));return;}
+ const result={...calculateCreditScenario(req.body?.inputs??{}),contract_source:{facility_id:terms.facility_id,term_version_id:terms.id,version:terms.version,review_status:terms.review_status,provenance:terms.provenance},financial_action:false};
+ if(req.body?.save===true&&result.status!=='blocked'){
+  const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT pg_advisory_xact_lock(hashtextextended('credit-scenario',0))");
+  const row=(await c.query(`INSERT INTO finance_os.model_snapshots(scenario_key,model_version,calculation_inputs,outputs,created_by) SELECT 'credit-decision',COALESCE(MAX(model_version),0)+1,$1,$2,$3 FROM finance_os.model_snapshots WHERE scenario_key='credit-decision' RETURNING id`,[JSON.stringify({inputs:req.body.inputs,contract_source:result.contract_source}),JSON.stringify(result),req.dataRoomUser!.id])).rows[0];
+  await logFinanceEvent({eventType:'credit.scenario.saved',entityType:'model_snapshot',entityId:row.id,summary:'Saved estimate only; no payment instruction',userId:req.dataRoomUser!.id,client:c});await c.query('COMMIT');
+  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
+ }
+ res.json(jsonOk({projection:result}));
+}));
+router.get('/bank-accounts',requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({accounts:(await pool.query('SELECT a.id,a.display_name,a.classification,a.currency,c.provider,c.provider_environment FROM finance_os.bank_accounts a JOIN finance_os.bank_connections c ON c.id=a.connection_id ORDER BY a.display_name')).rows}))));
+router.post('/bank-reconciliation/transfer',requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk(await matchBankTransfer(req.body.first_id,req.body.second_id,req.dataRoomUser!.id,req.body.reason)))));
+router.get("/bank-imports",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({imports:await listBankImports(pool,bankOffset(req.query.offset)),page_size:100,completeness:"page_only"}))));
+router.get("/bank-transactions",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({transactions:await listBankTransactions(pool,bankOffset(req.query.offset)),page_size:100,completeness:"page_only"}))));
+router.post("/bank-imports/monzo-csv",requireFinanceWrite,bankCsvUpload.single("file"),asyncHandler(async(req,res)=>{
+  if(!req.file)throw Object.assign(new Error("A Monzo CSV file is required"),{statusCode:400,code:"bank_csv_required"});
+  const result=await importMonzoCsv({file:req.file.buffer,filename:req.file.originalname,providerEnvironment:req.body?.provider_environment,accountLabel:req.body?.account_label,accountId:req.body?.account_id,stableAccountKey:req.body?.stable_account_key},req.dataRoomUser!.id);
+  return res.status(result.duplicate_file?200:201).json(jsonOk({import:result}));
+}));
 router.get("/compliance",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({compliance:await getFinanceCompliance()}))));
 router.get("/actions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({actions:await listFinanceActions()}))));
 router.post("/actions/refresh",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({summary:await refreshFinanceActions(req.dataRoomUser!.id)}))));
