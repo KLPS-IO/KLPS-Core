@@ -12,3 +12,21 @@ coverage
 .idea
 
 tmp
+
+# Local founder-review harnesses and runtime artefacts (never publish)
+scripts/export-finance-review-local.cjs
+scripts/finance-integration-local.cjs
+scripts/finance-local-review.cjs
+scripts/ingest-credit-local.cjs
+scripts/ingest-monzo-local.cjs
+.env.*
+*.dump
+*.sql.gz
+/finance-pg/
+/evidence-objects/
+/test-evidence-objects/
+/outputs/
+
+# Private portal observation validation harnesses
+scripts/ingest-portal-local.cjs
+scripts/validate-portal-http-local.cjs

@@ -124,7 +124,7 @@ test("checksum lookup reuses an active canonical evidence record", async () => {
 });
 
 test("adjustment evidence migration preserves every prior type and rollback refuses linked adjustments", () => {
-  const forward = require("node:fs").readFileSync("server/sql/20260807_expense_adjustment_evidence_links.sql", "utf8");
+  const forward = require("node:fs").readFileSync("server/sql/20260807_expense_adjustment_evidence_links.sql", "utf8") + require("node:fs").readFileSync("server/sql/20260918_credit_facilities.sql", "utf8");
   const rollback = require("node:fs").readFileSync("server/sql/20260807_expense_adjustment_evidence_links.rollback.sql", "utf8");
   for (const type of LINKED_ENTITY_TYPES.filter(type => type !== "vat_filing")) assert.match(forward, new RegExp(`'${type}'`));
   assert.match(forward, /'expense_adjustment'/);
@@ -496,11 +496,12 @@ test("delete everywhere requires exact explicit confirmation", async () => {
 });
 
 test("canonical evidence supports every WP1 provenance entity while KPI stays unsupported", async () => {
-  assert.deepEqual(LINKED_ENTITY_TYPES, [
+  assert.deepEqual([...LINKED_ENTITY_TYPES].sort(), [
     "assumption", "product", "decision", "risk", "company", "funding", "kpi",
     "report", "scenario", "hire", "document", "expense", "expense_adjustment", "vat_filing", "rd_work_package",
-    "rd_supplier", "rd_interaction", "rd_finding", "rd_action", "rd_rfq", "rd_quotation"
-  ]);
+    "rd_supplier", "rd_interaction", "rd_finding", "rd_action", "rd_rfq", "rd_quotation",
+    "credit_facility", "credit_term_version", "credit_statement", "bank_balance_observation", "bank_account", "bank_sync_run", "bank_transaction"
+  ].sort());
   const db = { query: async () => ({ rows: [{ id: EVIDENCE_ID }] }) };
   await assert.rejects(
     linkEvidence(EVIDENCE_ID, {

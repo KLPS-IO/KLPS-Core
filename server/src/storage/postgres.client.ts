@@ -5,9 +5,7 @@ dotenv.config();
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl: process.env.FINANCE_LOCAL_REVIEW === "1" && new URL(process.env.DATABASE_URL!).hostname === "127.0.0.1" ? false : { rejectUnauthorized: false }
 });
 
 const TRANSIENT_DATABASE_ERRORS = [
