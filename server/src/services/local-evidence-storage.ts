@@ -9,5 +9,5 @@ export function localEvidenceRoot(){
 }
 function destination(key:string){const root=localEvidenceRoot();if(!root)throw new Error('Local evidence disabled');const target=path.resolve(root,key);if(!target.startsWith(root+path.sep))throw new Error('Invalid object key');return target;}
 export async function putLocalEvidence(key:string,bytes:Buffer){const target=destination(key);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,bytes,{mode:0o600});return key;}
-export async function readLocalEvidence(key:string){return {body:await fs.readFile(destination(key)),contentType:key.endsWith('.pdf')?'application/pdf':'text/csv'};}
+export async function readLocalEvidence(key:string){return {body:await fs.readFile(destination(key)),contentType:key.endsWith('.png')?'image/png':key.endsWith('.pdf')?'application/pdf':'text/csv'};}
 export async function deleteLocalEvidence(key:string){await fs.rm(destination(key),{force:true});}

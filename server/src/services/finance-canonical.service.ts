@@ -34,7 +34,7 @@ export async function canonicalFinance(scenarioKey='base',db:Pick<PoolClient,'qu
   const metric=(kind:string)=>{const o=observations.find(o=>o.bank_account_id===f.bank_account_id&&o.metric===kind&&o.currency===f.currency&&o.as_of<=now);return o&&o.review_status==='reviewed'&&Date.parse(now)-Date.parse(o.as_of)<=86400000?{value:String(o.value),as_of:o.as_of,evidence_id:o.evidence_id,id:o.id}:null;};
   const limit=metric('credit_limit'),debt=metric('outstanding_debt'),available=metric('available_credit');
   const latestStatement=statements.find(s=>s.facility_id===f.id);const statement=latestStatement?.review_status==='reviewed'?latestStatement:null;
-  return {...f,limit,available,debt,statement,utilisation:limit&&debt&&decimal(limit.value)>0n?format(divide(decimal(debt.value)*100n*SCALE,decimal(limit.value))):null};
+  return {...f,portal_observation:accounts.find(a=>a.id===f.bank_account_id)?.metadata?.portal_observation??null,limit,available,debt,statement,utilisation:limit&&debt&&decimal(limit.value)>0n?format(divide(decimal(debt.value)*100n*SCALE,decimal(limit.value))):null};
  });
  const missing:string[]=[];
  if(actualCash.value===null)missing.push('Current evidenced cash for every cash account');

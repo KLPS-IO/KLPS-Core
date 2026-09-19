@@ -26,3 +26,7 @@ scripts/ingest-monzo-local.cjs
 /evidence-objects/
 /test-evidence-objects/
 /outputs/
+
+# Private portal observation validation harnesses
+scripts/ingest-portal-local.cjs
+scripts/validate-portal-http-local.cjs
