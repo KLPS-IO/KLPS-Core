@@ -184,7 +184,7 @@ if (process.env.NODE_ENV === "production") {
 app.use((req, res, next) => {
 
   console.log(
-    `${req.method} ${req.path}`
+    `${req.method} ${/^\/api\/growth\/media-delivery\//i.test(req.path) ? "/api/growth/media-delivery/[redacted]" : req.path}`
   );
 
   next();
