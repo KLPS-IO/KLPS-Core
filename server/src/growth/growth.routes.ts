@@ -47,6 +47,8 @@ import {
 } from "./mission-candidate.service";
 import { pool } from "../storage/postgres.client";
 
+import { publicMediaRoutes, privateMediaRoutes } from "./media-delivery.routes";
+
 const router = express.Router();
 const asyncHandler = (handler: (req: DataRoomRequest, res: express.Response) => Promise<unknown>) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -73,6 +75,7 @@ export const requireGrowthFounder = (
 // The LinkedIn callback authenticates the single-use state record and its stored
 // founder/workspace binding. It deliberately does not depend on a cross-site cookie.
 router.use("/social",socialOAuthCallbackRoutes);
+router.use(publicMediaRoutes);
 router.use(requireDataRoomAuth, requireGrowthFounder);
 router.use("/social",socialRoutes);
 
@@ -82,6 +85,8 @@ router.use((req:DataRoomRequest,res,next)=>{
   if(reviewerAllowed.has(`${req.method} ${req.path}`))return next();
   return res.status(403).json({status:"error",code:"reviewer_forbidden",message:"This action is not available in the review workspace"});
 });
+
+router.use(privateMediaRoutes);
 
 const workspaceFor = (req: DataRoomRequest) => ensureWorkspace(req.dataRoomUser!.id,pool,req.dataRoomUser!.role);
 const param = (value: unknown) => Array.isArray(value) ? String(value[0]) : String(value);

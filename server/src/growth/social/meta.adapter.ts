@@ -289,3 +289,26 @@ export const checkMetaIdentityHealth = async (accessToken: string) => {
     capabilities: [] as SocialCapability[]
   };
 };
+
+// Request preparation only. Execution remains blocked by the existing adapter.
+// A worker must revalidate variant approval and delivery state immediately before sending.
+export type InstagramLoginMode = 'instagram' | 'facebook';
+export function prepareInstagramRequest(input: {
+ loginMode: InstagramLoginMode; userId: string; accessToken: string;
+ stage: 'container' | 'publish'; imageUrl?: string; caption?: string; creationId?: string;
+ approved: boolean;
+}) {
+ if(input.approved!==true || !/^\d+$/.test(input.userId) || !input.accessToken) throw metaError('Instagram publishing is not approved','instagram_not_approved',409);
+ if(input.loginMode!=='instagram' && input.loginMode!=='facebook') throw metaError('Invalid login mode','instagram_invalid_login',400);
+ const origin=input.loginMode==='instagram'?'https://graph.instagram.com':META_GRAPH_ORIGIN;
+ const body=new URLSearchParams();
+ if(input.stage==='container') {
+  const url=new URL(input.imageUrl??'');
+  if(url.protocol!=='https:' || url.username || url.password) throw metaError('HTTPS delivery URL required','instagram_invalid_media',400);
+  body.set('image_url',url.href); body.set('caption',input.caption??'');
+ } else if(input.stage==='publish' && /^\d+$/.test(input.creationId??'')) body.set('creation_id',input.creationId!);
+ else throw metaError('Invalid Instagram stage','instagram_invalid_stage',400);
+ return {url:`${origin}/${META_GRAPH_VERSION}/${input.userId}/${input.stage==='container'?'media':'media_publish'}`,
+  init:{method:'POST',headers:{Authorization:`Bearer ${input.accessToken}`,'Content-Type':'application/x-www-form-urlencoded'},body},
+  requiredPermission:input.loginMode==='instagram'?'instagram_business_content_publish':'instagram_content_publish'};
+}
