@@ -47,7 +47,7 @@ const inTransaction = async <T>(db: Db, work: (transaction: Db) => Promise<T>) =
 export const getSocialProviderOverview = async (workspaceId: string, db: Db = pool) => {
   const connectionResult = await db.query(`
     SELECT id,provider,provider_account_name,provider_account_type,status,granted_scopes,
-      CASE WHEN provider='x' THEN provider_account_id ELSE NULL END AS publishing_destination,
+      CASE WHEN provider IN ('x','snapchat') THEN provider_account_id ELSE NULL END AS publishing_destination,
       discovered_capabilities,last_successful_check_at,last_error_code,last_error_at,
       connected_at,token_expires_at
     FROM growth_os.social_connections WHERE workspace_id=$1
@@ -93,6 +93,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         reauthorization_required: Boolean(connection) && (!publishingEnabled || connection.status !== "connected"),
         connection: connection ? {...connection,discovered_capabilities:publishingCapabilities} : null
       } : {}),
+      ...(definition.id === "snapchat" ? {publishing_destination:connection?.publishing_destination ?? null,handoff_enabled:connection?.status === "connected" && (adapter.capabilitiesForScopes?.(connection.granted_scopes ?? []) ?? []).includes("manual_handoff")} : {}),
       approval_required: !providerActivated,
       ...(definition.id === "facebook" ? {
         facebook_business_configuration: (() => {
@@ -660,7 +661,7 @@ export const upsertSocialContentVariant = async (
   const copy = input.copy === null || input.copy === undefined ? null : safeText(input.copy,"copy",10000);
   if (!Array.isArray(input.media_references ?? [])) throw socialError("media_references must be an array");
   const media = input.media_references ?? [];
-  if (provider === "x") getSocialAdapter(provider).validatePublish?.({text:copy ?? "",media:media as unknown[]});
+  if (provider === "x" || provider === "snapchat") getSocialAdapter(provider).validatePublish?.({text:copy ?? "",media:media as unknown[]});
   const destination = input.destination_reference === null || input.destination_reference === undefined
     ? null : safeText(input.destination_reference,"destination_reference",1000);
   const required: SocialCapability[] = [];

@@ -20,6 +20,7 @@ const content = (row: Record<string,any>) => ({copy:row.copy,media:row.media_ref
 const publicJob = (row: Record<string,any>) => ({
  id:row.id,provider:row.provider,status:row.status,content_variant_id:row.content_variant_id,
  copy:row.execution_copy ?? row.copy,account_name:row.provider_account_name,
+ ...(row.provider==='snapchat'?{media_references:row.media_references}:{}),
  destination_reference:row.destination_reference,current_fingerprint:fingerprintSocialContent(content(row)),
  approval_fingerprint:row.approval_fingerprint,approved_account_id:row.approved_account_id,
  provider_post_id:row.provider_post_id,provider_post_url:row.provider_post_url,published_at:row.published_at,
@@ -30,16 +31,16 @@ async function transaction<T>(db:Database,work:(c:PoolClient)=>Promise<T>) {
  const c=await db.connect();try{await c.query('BEGIN');const result=await work(c);await c.query('COMMIT');return result;}
  catch(e){await c.query('ROLLBACK').catch(()=>undefined);throw e;}finally{c.release();}
 }
-async function founder(c:PoolClient,workspace:string,user:string) {
+export async function founder(c:PoolClient,workspace:string,user:string) {
  const r=await c.query(`SELECT w.id FROM growth_os.workspaces w JOIN data_room.users u ON u.id=w.owner_user_id
  WHERE w.id=$1 AND u.id=$2 AND u.role='founder_admin' AND coalesce(u.is_active,true) AND (u.expires_at IS NULL OR u.expires_at>now())`,[workspace,user]);
  if(!r.rows.length)throw error('social_founder_required','Only the workspace founder can approve or publish.',403);
 }
-async function locked(c:PoolClient,workspace:string,job:string) {
+export async function locked(c:PoolClient,workspace:string,job:string) {
  const r=await c.query(selection+' FOR UPDATE OF c,v,j',[workspace,id(job)]);
  if(!r.rows[0])throw error('social_publish_job_not_found','Publish job not found.',404);return r.rows[0];
 }
-function validate(row:Record<string,any>,expected:string) {
+export function validate(row:Record<string,any>,expected:string) {
  const adapter=getSocialAdapter(row.provider);
  if(!adapter.validatePublish || !adapter.capabilitiesForScopes)throw error('social_provider_not_activated','Publishing for this provider is not enabled.');
  if(expected!==fingerprintSocialContent(content(row)))throw error('social_approval_stale','Content or destination changed. Review and approve it again.');
@@ -48,7 +49,7 @@ function validate(row:Record<string,any>,expected:string) {
   mediaApproved:Boolean(row.media_approved_at)&&!approvalMustReset(row.variant_fingerprint,content(row)),
   destinationValid:Boolean(row.provider_account_id)&&row.destination_reference===row.provider_account_id,
   connected:row.connection_status==='connected',healthy:Boolean(row.last_successful_check_at),
-  requiredCapabilities:['text','direct_publishing'],availableCapabilities:adapter.capabilitiesForScopes(row.granted_scopes ?? [])
+  requiredCapabilities:adapter.approvalCapabilities ?? ['text','direct_publishing'],availableCapabilities:adapter.capabilitiesForScopes(row.granted_scopes ?? [])
  });
  if(!readiness.ready)throw error('social_publish_not_ready',`Publishing is blocked: ${readiness.missing.join(', ')}. Reconnect if write access is missing.`);
  adapter.validatePublish({text:row.copy,media:row.media_references});return adapter;
@@ -98,6 +99,7 @@ export async function executePublishJob(workspace:string,user:string,job:string,
  const expected=input.expected_fingerprint;
  // Idempotent replay of a confirmed result needs no token refresh or new provider request.
  const existing=await getPublishJob(workspace,job,db);
+ if(getSocialAdapter(existing.provider).manualHandoff)throw error('social_manual_handoff_required','Complete this share manually in Snapchat; direct publishing is unavailable.');
  if(existing.status==='published')return existing;
  await freshToken(workspace,user,job,expected,db);
  let claim;

@@ -1,3 +1,4 @@
+import {eligibleHandoffMedia,prepareHandoff,readHandoff,previewHandoffMedia} from "./social-handoff.service";
 import express from "express";
 import { DataRoomRequest } from "../../services/data-room.service";
 import { ensureWorkspace } from "../growth.service";
@@ -37,6 +38,11 @@ const providerFrom = (value: unknown) => {
   getSocialAdapter(provider);
   return provider as SocialProvider;
 };
+
+socialOAuthCallbackRoutes.get('/handoffs/:token',async(req,res)=>{
+ res.set({'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'none'; img-src https:; style-src 'unsafe-inline'; frame-ancestors 'none'"});
+ try{res.type('html').send(await readHandoff(String(req.params.token)));}catch{res.status(404).end();}
+});
 
 const SOCIAL_FRONTEND_ORIGIN = "https://klps.co.uk";
 const SOCIAL_FRONTEND_PATH = "/innovation-lab/funnel/settings";
@@ -362,6 +368,10 @@ router.post("/connections/:provider/disconnect", asyncHandler(async (req,res) =>
     )
   });
 }));
+
+router.get('/handoff-media/:id/preview',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.set({'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}).type('jpeg').send(await previewHandoffMedia(w.id,String(req.params.id)));}));
+router.get('/handoff-media',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json({media:await eligibleHandoffMedia(w.id)});}));
+router.post('/publish-jobs/:id/handoff',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json({handoff:await prepareHandoff(w.id,req.dataRoomUser!.id,String(req.params.id),req.body??{})});}));
 
 router.get("/publish-jobs", asyncHandler(async (req,res) => {
   const workspace=await workspaceFor(req);
