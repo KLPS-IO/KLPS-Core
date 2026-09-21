@@ -17,6 +17,7 @@ import {
   schedulePublishJob,
   upsertSocialContentVariant,
 } from "./social.service";
+import { approvePublishJob, executePublishJob, getPublishJob, listPublishJobs } from "./social-publishing.service";
 import { SocialProvider } from "./social.types";
 import { createMetaOAuthDiagnostics } from "./meta.diagnostics";
 import { createXOAuthDiagnostics } from "./x.diagnostics";
@@ -360,6 +361,24 @@ router.post("/connections/:provider/disconnect", asyncHandler(async (req,res) =>
       workspace.id,req.dataRoomUser!.id,providerFrom(req.params.provider)
     )
   });
+}));
+
+router.get("/publish-jobs", asyncHandler(async (req,res) => {
+  const workspace=await workspaceFor(req);
+  res.json({status:"success",publish_jobs:await listPublishJobs(workspace.id)});
+}));
+router.get("/publish-jobs/:id", asyncHandler(async (req,res) => {
+  const workspace=await workspaceFor(req);
+  res.json({status:"success",publish_job:await getPublishJob(workspace.id,String(req.params.id))});
+}));
+router.post("/publish-jobs/:id/approve", asyncHandler(async (req,res) => {
+  const workspace=await workspaceFor(req);
+  if(req.body?.approved!==true)throw Object.assign(new Error("Explicit founder approval is required"),{code:"social_job_not_approved",statusCode:400});
+  res.json({status:"success",publish_job:await approvePublishJob(workspace.id,req.dataRoomUser!.id,String(req.params.id),String(req.body?.expected_fingerprint??""))});
+}));
+router.post("/publish-jobs/:id/publish", asyncHandler(async (req,res) => {
+  const workspace=await workspaceFor(req);
+  res.json({status:"success",publish_job:await executePublishJob(workspace.id,req.dataRoomUser!.id,String(req.params.id),req.body??{})});
 }));
 
 router.post("/publish-jobs", asyncHandler(async (req,res) => {

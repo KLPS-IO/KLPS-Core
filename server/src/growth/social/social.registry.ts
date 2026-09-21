@@ -6,7 +6,7 @@ import {
 } from "./social.types";
 import { exchangeLinkedInAuthorizationCode } from "./linkedin.adapter";
 import { exchangeTikTokAuthorizationCode } from "./tiktok.adapter";
-import { exchangeXAuthorizationCode } from "./x.adapter";
+import { exchangeXAuthorizationCode, refreshXAccessToken, publishXText, validateXTextPost, xPublishingCapabilities } from "./x.adapter";
 import {
   checkMetaIdentityHealth,
   exchangeMetaAuthorizationCode
@@ -60,13 +60,12 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
     applicationName: "X OAuth 2.0 application",
     authorizationUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
-    // X requires tweet.read alongside users.read for GET /2/users/me. Funnel OS
-    // does not request posts, timelines, likes or analytics in this phase.
-    scopes: ["tweet.read","users.read","offline.access"],
-    capabilities: [],
+    // Identity scopes are retained; write capability is checked against the actual grant.
+    scopes: ["tweet.read","users.read","offline.access","tweet.write"],
+    capabilities: ["text","direct_publishing"],
     requiredEnvironment: ["X_CLIENT_ID","X_CLIENT_SECRET","X_REDIRECT_URI"],
     supportsPkce: true,
-    externalReview: ["Enable OAuth 2.0 Authorization Code Flow with PKCE for identity lookup only. tweet.read is required by X for authenticated-user lookup; Funnel OS does not retrieve or store posts."]
+    externalReview: ["Enable Read and write in X Developer settings, then reconnect X to grant tweet.write. Each text post still requires explicit founder approval."]
   },
   tiktok: {
     id: "tiktok", name: "TikTok",
@@ -193,13 +192,17 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
     }
     throw unavailable(`${definition.name} token exchange awaits developer credentials and provider approval`);
   },
-  refreshToken: async () => {
+  refreshToken: async token => {
+    if (definition.id === "x") return refreshXAccessToken(definition,providerEnv("x"),token);
     throw unavailable(`${definition.name} token refresh awaits provider activation`);
   },
   revokeToken: async () => {
     throw unavailable(`${definition.name} token revocation awaits provider activation`);
   },
-  publish: async () => {
+  capabilitiesForScopes: definition.id === "x" ? xPublishingCapabilities : undefined,
+  validatePublish: definition.id === "x" ? validateXTextPost : undefined,
+  publish: async (accessToken, input) => {
+    if (definition.id === "x") return publishXText(accessToken,input);
     throw unavailable(`${definition.name} publishing is intentionally disabled in Phase 4A`);
   },
   checkHealth: async accessToken => definition.id === "facebook"

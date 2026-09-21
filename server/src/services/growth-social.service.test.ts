@@ -113,7 +113,11 @@ test("token encryption is authenticated and tokens do not remain plaintext", () 
     const encrypted = encryptSocialSecret("private-token");
     assert.doesNotMatch(encrypted,/private-token/);
     assert.equal(decryptSocialSecret(encrypted),"private-token");
-    assert.throws(() => decryptSocialSecret(`${encrypted.slice(0,-2)}aa`));
+    const parts = encrypted.split(".");
+    const tampered = Buffer.from(parts[3],"base64url");
+    tampered[0] ^= 1; // Change a decoded byte, not potentially unused base64 padding bits.
+    parts[3] = tampered.toString("base64url");
+    assert.throws(() => decryptSocialSecret(parts.join(".")));
   } finally {
     if (previous === undefined) delete process.env.GROWTH_SOCIAL_ENCRYPTION_KEY;
     else process.env.GROWTH_SOCIAL_ENCRYPTION_KEY = previous;
@@ -260,7 +264,7 @@ test("identity activations keep provider permissions isolated", () => {
     "public_profile","pages_show_list","instagram_basic"
   ]);
   assert.deepEqual(getSocialAdapter("x").definition.scopes,[
-    "tweet.read","users.read","offline.access"
+    "tweet.read","users.read","offline.access","tweet.write"
   ]);
   assert.deepEqual(getSocialAdapter("tiktok").definition.scopes,["user.info.basic"]);
 });
@@ -546,9 +550,9 @@ test("OAuth start stores only hashed state and encrypted verifier", async () => 
     assert.equal(url.searchParams.get("client_id"),"client");
     assert.equal(url.searchParams.get("response_type"),"code");
     assert.equal(url.searchParams.get("redirect_uri"),process.env.X_REDIRECT_URI);
-    assert.equal(url.searchParams.get("scope"),"tweet.read users.read offline.access");
+    assert.equal(url.searchParams.get("scope"),"tweet.read users.read offline.access tweet.write");
     assert.equal(url.searchParams.get("code_challenge_method"),"S256");
-    for (const scope of ["tweet.write","media.write","dm.read","dm.write","follows.write","like.write"]) {
+    for (const scope of ["media.write","dm.read","dm.write","follows.write","like.write"]) {
       assert.doesNotMatch(url.searchParams.get("scope") ?? "",new RegExp(scope.replace(".","\\.")));
     }
     const oauthInsert = queries.find(item => item.sql.includes("social_oauth_authorisations"))!;
@@ -557,7 +561,7 @@ test("OAuth start stores only hashed state and encrypted verifier", async () => 
     const verifier=decryptSocialSecret(String(oauthInsert.values[3]));
     assert.equal(url.searchParams.get("code_challenge"),createPkceChallenge(verifier));
     assert.notEqual(url.searchParams.get("code_challenge"),verifier);
-    assert.deepEqual(oauthInsert.values[5],["tweet.read","users.read","offline.access"]);
+    assert.deepEqual(oauthInsert.values[5],["tweet.read","users.read","offline.access","tweet.write"]);
     assert.doesNotMatch(JSON.stringify(queries),/code_challenge_method.*private/i);
   } finally { process.env = previous; }
 });
@@ -1623,7 +1627,7 @@ const withXEnvironment=async (run:() => Promise<void>) => {
 const validXStateBinding=() => ({
   workspace_id:workspaceId,initiated_by:userId,redirect_uri:process.env.X_REDIRECT_URI,
   encrypted_code_verifier:encryptSocialSecret("private-pkce-verifier"),
-  requested_scopes:["tweet.read","users.read","offline.access"]
+  requested_scopes:["tweet.read","users.read","offline.access","tweet.write"]
 });
 
 test("X exchanges with confidential-client PKCE, retrieves the authenticated user and persists encrypted identity tokens", async () => {
@@ -1642,7 +1646,7 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     const connection={
       id:"33333333-3333-4333-8333-333333333333",provider:"x",status:"connected",
       provider_account_name:"Founder Display Name",provider_account_type:"member",
-      granted_scopes:["tweet.read","users.read","offline.access"],discovered_capabilities:[]
+      granted_scopes:["tweet.read","users.read","offline.access","tweet.write"],discovered_capabilities:[]
     };
     const {db,queries}=stateCallbackDb([validXStateBinding()]);
     const originalQuery=db.query;
@@ -1674,8 +1678,8 @@ test("X exchanges with confidential-client PKCE, retrieves the authenticated use
     assert.equal(insert.values[3],"Founder Display Name");
     assert.equal(decryptSocialSecret(String(insert.values[5])),"x-access-token");
     assert.equal(decryptSocialSecret(String(insert.values[6])),"x-refresh-token");
-    assert.deepEqual(insert.values[8],["tweet.read","users.read","offline.access"]);
-    assert.deepEqual(insert.values[9],[]);
+    assert.deepEqual(insert.values[8],["tweet.read","users.read","offline.access","tweet.write"]);
+    assert.deepEqual(insert.values[9],["text","direct_publishing"]);
     assert.doesNotMatch(JSON.stringify(queries),/private-code|private-pkce-verifier|x-access-token|x-refresh-token|x-client-secret/);
     assert.ok(diagnosticLines.some(line => /x_oauth_token_exchange_completed/.test(line)));
     assert.ok(diagnosticLines.some(line => /"x_refresh_token_returned":true/.test(line)));
@@ -1745,7 +1749,7 @@ test("X callback is public, cookie-independent and redirects with allowlisted re
   assert.doesNotMatch(redirectUrl,/state|code|cookie/);
   const routes=readFileSync("server/src/growth/social/social.routes.ts","utf8");
   assert.match(routes,/socialOAuthCallbackRoutes\.get\(\s*"\/oauth\/x\/callback"/);
-  assert.deepEqual(getSocialAdapter("x").definition.capabilities,[]);
+  assert.deepEqual(getSocialAdapter("x").definition.capabilities,["text","direct_publishing"]);
 });
 
 test("X diagnostics allowlist correlation, stages and status without raw provider data", () => {
