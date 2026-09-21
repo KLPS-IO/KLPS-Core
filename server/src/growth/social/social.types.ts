@@ -106,6 +106,18 @@ export type MetaOAuthDiagnostics = {
   emit: (event: string, details?: MetaOAuthDiagnosticDetails) => void;
 };
 
+export type SocialPublishInput = {
+  text: string;
+  media: unknown[];
+};
+export type SocialPublishResult = { postId: string; postUrl: string };
+export type OAuthRefreshResult = {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt: Date;
+  scopes?: string[];
+};
+
 export interface SocialProviderAdapter {
   readonly definition: SocialProviderDefinition;
   getEnvironment(): ProviderEnvironment;
@@ -120,8 +132,10 @@ export interface SocialProviderAdapter {
     redirectUri: string;
     diagnostics?: MetaOAuthDiagnostics;
   }): Promise<OAuthTokenResult>;
-  refreshToken(refreshToken: string): Promise<OAuthTokenResult>;
+  refreshToken(refreshToken: string): Promise<OAuthRefreshResult>;
   revokeToken(accessToken: string): Promise<void>;
-  publish(): Promise<never>;
+  capabilitiesForScopes?(scopes: string[]): SocialCapability[];
+  validatePublish?(input: SocialPublishInput): void;
+  publish(accessToken: string, input: SocialPublishInput): Promise<SocialPublishResult>;
   checkHealth(accessToken: string): Promise<{ healthy: boolean; capabilities: SocialCapability[] }>;
 }

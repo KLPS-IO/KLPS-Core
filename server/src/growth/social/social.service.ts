@@ -47,6 +47,7 @@ const inTransaction = async <T>(db: Db, work: (transaction: Db) => Promise<T>) =
 export const getSocialProviderOverview = async (workspaceId: string, db: Db = pool) => {
   const connectionResult = await db.query(`
     SELECT id,provider,provider_account_name,provider_account_type,status,granted_scopes,
+      CASE WHEN provider='x' THEN provider_account_id ELSE NULL END AS publishing_destination,
       discovered_capabilities,last_successful_check_at,last_error_code,last_error_at,
       connected_at,token_expires_at
     FROM growth_os.social_connections WHERE workspace_id=$1
@@ -72,6 +73,11 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const definition = adapter.definition;
     const environment = validateSocialEnvironment(definition.id);
     const configuredNames = new Set(definition.requiredEnvironment.filter(name => process.env[name]?.trim()));
+    const connection = connections.get(definition.id);
+    const publishingCapabilities = definition.id === "x"
+      ? (connection?.status === "connected" ? adapter.capabilitiesForScopes?.(connection.granted_scopes ?? []) ?? [] : [])
+      : definition.capabilities;
+    const publishingEnabled = definition.id === "x" && connection?.status === "connected" && publishingCapabilities.includes("direct_publishing");
     const providerActivated = ["linkedin","facebook","tiktok","x","snapchat"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
@@ -80,7 +86,13 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       availability: environment,
       required_permissions: definition.scopes,
       future_permissions: definition.futurePermissions ?? [],
-      capabilities: definition.capabilities,
+      capabilities: definition.id === "x" ? publishingCapabilities : definition.capabilities,
+      ...(definition.id === "x" ? {
+        publishing_enabled: publishingEnabled,
+        publishing_destination: connection?.publishing_destination ?? null,
+        reauthorization_required: Boolean(connection) && (!publishingEnabled || connection.status !== "connected"),
+        connection: connection ? {...connection,discovered_capabilities:publishingCapabilities} : null
+      } : {}),
       approval_required: !providerActivated,
       ...(definition.id === "facebook" ? {
         facebook_business_configuration: (() => {
@@ -94,6 +106,9 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         })()
       } : {}),
       setup_checklist: [
+        ...(definition.id === "x" ? [{label:"Publishing authorisation",detail:publishingEnabled
+          ? "Text publishing authorised. Every post requires founder approval and Publish now."
+          : "Identity connection does not enable publishing. Reconnect X and grant tweet.write; no keys need changing.",status:publishingEnabled ? "configured" : "required"}] : []),
         {
           label: "Developer account",
           detail: definition.developerAccount,
@@ -123,7 +138,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
   });
 };
 
-const audit = async (
+export const auditSocialEvent = async (
   workspaceId: string,
   userId: string | null,
   provider: string | null,
@@ -152,7 +167,7 @@ export const beginSocialOAuth = async (
   const adapter = getSocialAdapter(provider);
   const environmentStatus = validateSocialEnvironment(provider);
   if (!environmentStatus.available) {
-    await audit(workspaceId,userId,provider,"oauth_start","blocked",{ missing_environment: environmentStatus.missing_environment },db);
+    await auditSocialEvent(workspaceId,userId,provider,"oauth_start","blocked",{ missing_environment: environmentStatus.missing_environment },db);
     throw socialError(
       `${adapter.definition.name} cannot connect yet. Missing: ${environmentStatus.missing_environment.join(", ") || "provider activation"}`,
       "social_provider_unavailable",
@@ -191,7 +206,7 @@ export const beginSocialOAuth = async (
       END,
       last_error_code=NULL,last_error_at=NULL
   `, [workspaceId,provider]);
-  await audit(workspaceId,userId,provider,"oauth_start","started",{
+  await auditSocialEvent(workspaceId,userId,provider,"oauth_start","started",{
     redirect_host:new URL(redirectUri).host,
     ...(provider === "facebook" ? { grant_mode:grantMode } : {})
   },db);
@@ -219,7 +234,7 @@ export const completeSocialOAuth = async (
     RETURNING *
   `, [workspaceId,provider,hashOAuthState(state)]);
   if (!authorisation.rows[0]) {
-    await audit(workspaceId,userId,provider,"oauth_callback","blocked",{ reason: "invalid_expired_or_replayed_state" },db);
+    await auditSocialEvent(workspaceId,userId,provider,"oauth_callback","blocked",{ reason: "invalid_expired_or_replayed_state" },db);
     throw socialError("OAuth state is invalid, expired or already used", "social_oauth_state_invalid", 409);
   }
   return completeSocialOAuthForAuthorisation({
@@ -440,7 +455,7 @@ const completeSocialOAuthForAuthorisation = async (
         last_error_code='provider_authorization_failed',last_error_at=now()
       WHERE workspace_id=$1 AND provider=$2
     `, [workspaceId,provider]);
-    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "provider_authorization_failed" },db);
+    await auditSocialEvent(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "provider_authorization_failed" },db);
     throw socialError(`${adapter.definition.name} authorisation was not completed`, "social_oauth_provider_error");
   }
   if (!code) {
@@ -453,7 +468,7 @@ const completeSocialOAuthForAuthorisation = async (
         last_error_code='missing_authorization_code',last_error_at=now()
       WHERE workspace_id=$1 AND provider=$2
     `, [workspaceId,provider]);
-    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "missing_authorization_code" },db);
+    await auditSocialEvent(workspaceId,userId,provider,"oauth_callback","failure",{ reason: "missing_authorization_code" },db);
     throw socialError("OAuth authorisation code is required", "social_oauth_code_missing");
   }
   try {
@@ -530,7 +545,7 @@ const completeSocialOAuthForAuthorisation = async (
           provider_asset_username=EXCLUDED.provider_asset_username,
           status='active',discovered_at=now(),updated_at=now()
       `,[workspaceId,connection.id,JSON.stringify(assets)]);
-        await audit(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
+        await auditSocialEvent(workspaceId,userId,provider,"oauth_callback","success",{},transaction);
         return connection;
       });
       diagnostics?.emit(
@@ -575,7 +590,7 @@ const completeSocialOAuthForAuthorisation = async (
         last_error_code=$3,last_error_at=now()
       WHERE workspace_id=$1 AND provider=$2
     `, [workspaceId,provider,errorCode]);
-    await audit(workspaceId,userId,provider,"oauth_callback","failure",{ reason:errorCode },db);
+    await auditSocialEvent(workspaceId,userId,provider,"oauth_callback","failure",{ reason:errorCode },db);
     throw reason;
   }
 };
@@ -600,7 +615,7 @@ export const disconnectSocialProvider = async (
       DELETE FROM growth_os.social_connection_assets
       WHERE workspace_id=$1 AND social_connection_id=$2
     `,[workspaceId,result.rows[0].id]);
-    await audit(workspaceId,userId,provider,"connection_disconnect","success",{},transaction);
+    await auditSocialEvent(workspaceId,userId,provider,"connection_disconnect","success",{},transaction);
     return result.rows[0];
   });
 };
@@ -645,6 +660,7 @@ export const upsertSocialContentVariant = async (
   const copy = input.copy === null || input.copy === undefined ? null : safeText(input.copy,"copy",10000);
   if (!Array.isArray(input.media_references ?? [])) throw socialError("media_references must be an array");
   const media = input.media_references ?? [];
+  if (provider === "x") getSocialAdapter(provider).validatePublish?.({text:copy ?? "",media:media as unknown[]});
   const destination = input.destination_reference === null || input.destination_reference === undefined
     ? null : safeText(input.destination_reference,"destination_reference",1000);
   const required: SocialCapability[] = [];
@@ -679,7 +695,7 @@ export const upsertSocialContentVariant = async (
       approval_fingerprint=CASE WHEN growth_os.social_content_variants.approval_fingerprint=$7
         THEN growth_os.social_content_variants.approval_fingerprint ELSE NULL END
     RETURNING *
-  `, [workspaceId,contentItemId,provider,copy,media,destination,fingerprint]);
+  `, [workspaceId,contentItemId,provider,copy,JSON.stringify(media),destination,fingerprint]);
   if (!result.rows[0]) throw socialError("Studio content item not found in this workspace","social_content_not_found",404);
   return result.rows[0];
 };
@@ -706,11 +722,11 @@ export const approveSocialContentVariant = async (
     UPDATE growth_os.social_content_variants SET
       copy_approved_at=CASE WHEN $3 THEN now() ELSE NULL END,
       media_approved_at=CASE WHEN $4 THEN now() ELSE NULL END,
-      approved_by=CASE WHEN $3 AND $4 THEN $5 ELSE NULL END,
+      approved_by=CASE WHEN $3 AND $4 THEN $5::uuid ELSE NULL END,
       approval_fingerprint=CASE WHEN $3 AND $4 THEN $6 ELSE NULL END
     WHERE id=$1 AND workspace_id=$2 RETURNING *
   `,[variantId,workspaceId,input.copy_approved,input.media_approved,userId,fingerprint]);
-  await audit(workspaceId,userId,variant.provider,"content_approval",
+  await auditSocialEvent(workspaceId,userId,variant.provider,"content_approval",
     input.copy_approved && input.media_approved ? "success" : "blocked",
     { content_variant_id:variantId },db);
   return result.rows[0];
@@ -736,7 +752,7 @@ export const createPublishJob = async (
     RETURNING *
   `, [workspaceId,connectionId,variantId]);
   if (!result.rows[0]) throw socialError("Connection and content variant must belong to this workspace", "social_workspace_mismatch", 404);
-  await audit(workspaceId,userId,null,"publish_job_created","success",{ publish_job_id: result.rows[0].id },db);
+  await auditSocialEvent(workspaceId,userId,null,"publish_job_created","success",{ publish_job_id: result.rows[0].id },db);
   return result.rows[0];
 };
 
@@ -752,7 +768,7 @@ export const schedulePublishJob = async (
   if (Number.isNaN(Date.parse(scheduledFor))) throw socialError("scheduled_for must be an ISO timestamp");
   const result = await db.query(`
     SELECT j.*,c.status AS connection_status,c.last_successful_check_at,
-      c.discovered_capabilities,v.copy_approved_at,v.media_approved_at,
+      c.discovered_capabilities,c.provider,c.provider_account_id,c.granted_scopes,v.copy_approved_at,v.media_approved_at,
       v.destination_reference,v.approval_fingerprint AS variant_fingerprint,
       v.copy,v.media_references
     FROM growth_os.social_publish_jobs j
@@ -767,24 +783,24 @@ export const schedulePublishJob = async (
   const readiness = validatePublishReadiness({
     copyApproved: Boolean(job.copy_approved_at) && !approvalMustReset(job.variant_fingerprint,currentContent),
     mediaApproved: Boolean(job.media_approved_at) && !approvalMustReset(job.variant_fingerprint,currentContent),
-    destinationValid: Boolean(job.destination_reference),
+    destinationValid: job.provider === "x" ? job.destination_reference === job.provider_account_id : Boolean(job.destination_reference),
     connected: job.connection_status === "connected",
     healthy: Boolean(job.last_successful_check_at),
-    requiredCapabilities: [],
-    availableCapabilities: job.discovered_capabilities ?? []
+    requiredCapabilities: job.provider === "x" ? ["text","direct_publishing"] : [],
+    availableCapabilities: job.provider === "x" ? getSocialAdapter("x").capabilitiesForScopes!(job.granted_scopes ?? []) : job.discovered_capabilities ?? []
   });
   if (!readiness.ready) {
-    await audit(workspaceId,userId,null,"publish_schedule","blocked",{ missing: readiness.missing,publish_job_id:jobId },db);
+    await auditSocialEvent(workspaceId,userId,null,"publish_schedule","blocked",{ missing: readiness.missing,publish_job_id:jobId },db);
     throw socialError(`Publishing is blocked: ${readiness.missing.join(", ")}`, "social_publish_not_ready", 409);
   }
   const updated = await db.query(`
     UPDATE growth_os.social_publish_jobs SET
       status='scheduled',scheduled_for=$3,approved_at=now(),approved_by=$4,
-      approval_fingerprint=$5
+      approval_fingerprint=$5,approved_account_id=CASE WHEN $6='x' THEN $7 ELSE approved_account_id END
     WHERE id=$1 AND workspace_id=$2 AND status IN ('draft','approved','retry')
     RETURNING *
-  `, [jobId,workspaceId,new Date(scheduledFor).toISOString(),userId,currentFingerprint]);
+  `, [jobId,workspaceId,new Date(scheduledFor).toISOString(),userId,currentFingerprint,job.provider,job.provider_account_id]);
   if (!updated.rows[0]) throw socialError("Publish job cannot be scheduled from its current state", "social_schedule_state_invalid", 409);
-  await audit(workspaceId,userId,null,"publish_schedule","success",{ publish_job_id:jobId },db);
+  await auditSocialEvent(workspaceId,userId,null,"publish_schedule","success",{ publish_job_id:jobId },db);
   return updated.rows[0];
 };

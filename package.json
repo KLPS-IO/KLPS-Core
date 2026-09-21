@@ -5,6 +5,7 @@
     "@types/multer": "^2.1.0",
     "@types/node": "^25.5.0",
     "@types/pg": "^8.20.0",
+    "@types/twitter-text": "^3.1.10",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2"
   },
@@ -16,7 +17,8 @@
     "multer": "^2.2.0",
     "pg": "^8.20.0",
     "qs": "^6.15.3",
-    "resend": "^6.12.3"
+    "resend": "^6.12.3",
+    "twitter-text": "^3.1.0"
   },
   "name": "klps-core",
   "version": "1.0.0",
