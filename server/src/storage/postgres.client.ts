@@ -25,6 +25,14 @@ const wait = (ms: number) =>
 const shouldRetryQuery = (
   error: unknown
 ) => {
+  // Node can report connection acquisition failures as AggregateError with an
+  // empty message. Match the structured code as well as legacy message text.
+  // Keep the existing transient categories and bounded retry policy; do not
+  // retry constraints, authorization failures, transactions or provider calls.
+  const code = error && typeof error === "object" && "code" in error
+    ? String(error.code).toUpperCase() : "";
+  if (["ETIMEDOUT", "ECONNRESET", "57P03", "57P01"].includes(code)) return true;
+
   const message =
     error instanceof Error
       ? error.message
