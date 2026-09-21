@@ -1,3 +1,4 @@
+import { snapchatHandoffCapabilities, validateSnapchatHandoff } from "./snapchat-handoff.adapter";
 import {
   SOCIAL_PROVIDERS,
   SocialProvider,
@@ -86,14 +87,14 @@ const definitions: Record<SocialProvider, SocialProviderDefinition> = {
   id: "snapchat",
   name: "Snapchat",
   developerAccount: "Snap Developer account",
-  applicationName: "Snap Kit application with Login Kit",
+  applicationName: "Snap Kit Login Kit and Creative Kit Web",
   authorizationUrl: "https://accounts.snapchat.com/accounts/oauth2/auth",
   tokenUrl: "https://accounts.snapchat.com/accounts/oauth2/token",
   scopes: [
     "https://auth.snapchat.com/oauth2/api/user.external_id",
     "https://auth.snapchat.com/oauth2/api/user.display_name"
   ],
-  capabilities: [],
+  capabilities: ["text","images","manual_handoff"],
   requiredEnvironment: [
     "SNAPCHAT_CLIENT_ID",
     "SNAPCHAT_CLIENT_SECRET",
@@ -199,8 +200,10 @@ const adapterFor = (definition: SocialProviderDefinition): SocialProviderAdapter
   revokeToken: async () => {
     throw unavailable(`${definition.name} token revocation awaits provider activation`);
   },
-  capabilitiesForScopes: definition.id === "x" ? xPublishingCapabilities : undefined,
-  validatePublish: definition.id === "x" ? validateXTextPost : undefined,
+  manualHandoff: definition.id === "snapchat",
+  approvalCapabilities: definition.id === "snapchat" ? ["manual_handoff"] : undefined,
+  capabilitiesForScopes: definition.id === "x" ? xPublishingCapabilities : definition.id === "snapchat" ? snapchatHandoffCapabilities : undefined,
+  validatePublish: definition.id === "x" ? validateXTextPost : definition.id === "snapchat" ? validateSnapchatHandoff : undefined,
   publish: async (accessToken, input) => {
     if (definition.id === "x") return publishXText(accessToken,input);
     throw unavailable(`${definition.name} publishing is intentionally disabled in Phase 4A`);

@@ -7,7 +7,7 @@ export type SocialProvider = typeof SOCIAL_PROVIDERS[number];
 export const SOCIAL_CAPABILITIES = [
   "text", "images", "video", "carousel", "stories", "reels", "threads",
   "clickable_links", "scheduling", "metrics", "comment_retrieval",
-  "draft_upload", "direct_publishing"
+  "draft_upload", "direct_publishing", "manual_handoff"
 ] as const;
 
 export type SocialCapability = typeof SOCIAL_CAPABILITIES[number];
@@ -134,6 +134,8 @@ export interface SocialProviderAdapter {
   }): Promise<OAuthTokenResult>;
   refreshToken(refreshToken: string): Promise<OAuthRefreshResult>;
   revokeToken(accessToken: string): Promise<void>;
+  approvalCapabilities?: SocialCapability[];
+  manualHandoff?: boolean;
   capabilitiesForScopes?(scopes: string[]): SocialCapability[];
   validatePublish?(input: SocialPublishInput): void;
   publish(accessToken: string, input: SocialPublishInput): Promise<SocialPublishResult>;
