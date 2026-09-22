@@ -1,6 +1,7 @@
 import { SocialCapability, SocialPublishInput } from './social.types';
-export const snapchatHandoffCapabilities = (scopes:string[]):SocialCapability[] =>
- ['https://auth.snapchat.com/oauth2/api/user.external_id','https://auth.snapchat.com/oauth2/api/user.display_name'].every(s=>scopes.includes(s)) ? ['manual_handoff'] : [];
+// Creative Kit Web does not use OAuth scopes. Shared approval validation still
+// requires a connected, checked Login Kit identity and matching account binding.
+export const snapchatHandoffCapabilities = (_scopes:string[]):SocialCapability[] => ['manual_handoff'];
 export function validateSnapchatHandoff(input:SocialPublishInput) {
  if(typeof input.text!=='string'||!input.text.trim()||input.text.length>500||!Array.isArray(input.media)||input.media.length>1)
   throw Object.assign(new Error('Enter 1–500 characters and select at most one approved JPEG preview.'),{statusCode:400,code:'snapchat_content_invalid'});
