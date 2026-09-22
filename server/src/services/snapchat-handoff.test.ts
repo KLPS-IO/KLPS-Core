@@ -7,9 +7,10 @@ import {snapchatHandoffCapabilities,snapchatShareHtml,validateSnapchatHandoff} f
 import {prepareHandoff,readHandoff} from '../growth/social/social-handoff.service';
 import {upsertSocialContentVariant,approveSocialContentVariant,createPublishJob} from '../growth/social/social.service';
 import {approvePublishJob,getPublishJob,executePublishJob} from '../growth/social/social-publishing.service';
-const scopes=['https://auth.snapchat.com/oauth2/api/user.external_id','https://auth.snapchat.com/oauth2/api/user.display_name'];
+// Match the existing production Login Kit grant; /me verified the external ID.
+const scopes=['https://auth.snapchat.com/oauth2/api/user.display_name'];
 test('Creative Kit capability is manual only; content and metadata are validated and HTML escaped',()=>{
- assert.deepEqual(snapchatHandoffCapabilities(scopes),['manual_handoff']);assert.deepEqual(snapchatHandoffCapabilities([]),[]);
+ assert.deepEqual(snapchatHandoffCapabilities(scopes),['manual_handoff']);assert.deepEqual(snapchatHandoffCapabilities([]),['manual_handoff']);
  validateSnapchatHandoff({text:'Approved link',media:[]});
  for(const value of [{text:'',media:[]},{text:'a'.repeat(501),media:[]},{text:'hi',media:[{url:'https://private.invalid'}]}])assert.throws(()=>validateSnapchatHandoff(value));
  const html=snapchatShareHtml('<script>alert("bad")</script>',null,'https://example.com/share');assert(!html.includes('<script>'));assert(html.includes('&lt;script&gt;'));assert(!html.includes('access_token'));
