@@ -1,3 +1,4 @@
+import { getDebtWorkspace, initialiseDebtApplication, updateDebtApplication, saveDebtItem, getPrivatePsb, savePrivatePsb, addDebtInteraction, recordDebtReview } from '../services/debt-application.service';
 import {canonicalFinance} from '../services/finance-canonical.service';
 import {calculateCreditScenario} from '../services/credit-engine';
 import {matchBankTransfer} from '../services/bank-import.service';
@@ -255,6 +256,18 @@ const readinessWrite = (operation: (req: DataRoomRequest, client: import('pg').P
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 });
+// All application routes inherit authentication, authorised user, NDA and founder/admin gates.
+// Personal intake is additionally scoped to the authenticated applicant in the service.
+router.use('/debt-applications', (_req,res,next)=>{res.setHeader('Cache-Control','private, no-store');next();});
+router.get('/debt-applications', asyncHandler(async(req,res)=>res.json(jsonOk(await getDebtWorkspace(req.dataRoomUser!.id)))));
+router.post('/debt-applications', readinessWrite((req,db)=>initialiseDebtApplication(req.dataRoomUser!.id,db)));
+router.patch('/debt-applications/:id', readinessWrite((req,db)=>updateDebtApplication(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
+router.post('/debt-applications/:id/items', readinessWrite((req,db)=>saveDebtItem(getParam(req.params.id),null,req.body??{},req.dataRoomUser!.id,db)));
+router.patch('/debt-applications/:id/items/:itemId', readinessWrite((req,db)=>saveDebtItem(getParam(req.params.id),getParam(req.params.itemId),req.body??{},req.dataRoomUser!.id,db)));
+router.get('/debt-applications/:id/psb', asyncHandler(async(req,res)=>res.json(jsonOk(await getPrivatePsb(getParam(req.params.id),req.dataRoomUser!.id)))));
+router.patch('/debt-applications/:id/psb/:entryId', readinessWrite((req,db)=>savePrivatePsb(getParam(req.params.id),getParam(req.params.entryId),req.body??{},req.dataRoomUser!.id,db)));
+router.post('/debt-applications/:id/interactions', readinessWrite((req,db)=>addDebtInteraction(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
+router.post('/debt-applications/:id/reviews', readinessWrite((req,db)=>recordDebtReview(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
 router.get('/outreach', asyncHandler(async (_req,res) => res.json(jsonOk(await getOutreach()))));
 router.post('/outreach/:id/updates', readinessWrite((req,db) => recordUpdate(getParam(req.params.id),req.body ?? {},req.dataRoomUser!.id,db)));
 router.post('/readiness', readinessWrite((req,db) => initialiseReadiness(req.dataRoomUser!.id,db)));
