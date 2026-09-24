@@ -1,4 +1,4 @@
-import { getDebtWorkspace, initialiseDebtApplication, updateDebtApplication, saveDebtItem, getPrivatePsb, savePrivatePsb, addDebtInteraction, recordDebtReview } from '../services/debt-application.service';
+import { getDebtWorkspace, initialiseDebtApplication, updateDebtApplication, saveDebtItem, getPrivatePsb, savePrivatePsb, reconcilePrivatePsb, addDebtInteraction, recordDebtReview } from '../services/debt-application.service';
 import {canonicalFinance} from '../services/finance-canonical.service';
 import {calculateCreditScenario} from '../services/credit-engine';
 import {matchBankTransfer} from '../services/bank-import.service';
@@ -266,6 +266,7 @@ router.post('/debt-applications/:id/items', readinessWrite((req,db)=>saveDebtIte
 router.patch('/debt-applications/:id/items/:itemId', readinessWrite((req,db)=>saveDebtItem(getParam(req.params.id),getParam(req.params.itemId),req.body??{},req.dataRoomUser!.id,db)));
 router.get('/debt-applications/:id/psb', asyncHandler(async(req,res)=>res.json(jsonOk(await getPrivatePsb(getParam(req.params.id),req.dataRoomUser!.id)))));
 router.patch('/debt-applications/:id/psb/:entryId', readinessWrite((req,db)=>savePrivatePsb(getParam(req.params.id),getParam(req.params.entryId),req.body??{},req.dataRoomUser!.id,db)));
+router.post('/debt-applications/:id/psb/reconciliations', readinessWrite((req,db)=>reconcilePrivatePsb(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
 router.post('/debt-applications/:id/interactions', readinessWrite((req,db)=>addDebtInteraction(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
 router.post('/debt-applications/:id/reviews', readinessWrite((req,db)=>recordDebtReview(getParam(req.params.id),req.body??{},req.dataRoomUser!.id,db)));
 router.get('/outreach', asyncHandler(async (_req,res) => res.json(jsonOk(await getOutreach()))));

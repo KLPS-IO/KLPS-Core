@@ -1,3 +1,5 @@
+import { PSB_CLASSIFICATIONS, PSB_POLICY, validateComponents, validatePrivateContext, reconciliationSummary } from './debt-psb-reconciliation';
+import { readinessGates, cashFlowPreview, PASS3_BUSINESS_ITEMS } from './debt-readiness';
 import { randomUUID } from 'crypto';
 import { PoolClient } from 'pg';
 import { pool } from '../storage/postgres.client';
@@ -36,12 +38,14 @@ export function validateData(section:Section,value:unknown){
  for(const f of FIELDS[section]){
   const v=data[f.key];
   if(f.type==='money')result[f.key]=amount(v);
+  else if(f.type==='signed_money'){result[f.key]=v==null||v===''?null:(typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=1e9&&Math.abs(v*100-Math.round(v*100))<0.0001?v:(()=>{throw fail('Invalid signed financial input');})());}
   else if(f.type==='number'){if(v!=null&&v!==''&&(typeof v!=='number'||!Number.isFinite(v)||v<=0||v>1e6))throw fail('Quantity must be positive');result[f.key]=v===''||v==null?null:v;}
   else if(f.type==='date')result[f.key]=date(v);
   else if(f.type==='select')result[f.key]=v==null||v===''?f.options![0]:choose(v,f.options!,f.label);
   else result[f.key]=optional(v);
  }
- if(section==='budget'&&result.net!=null&&result.vat!=null&&result.gross!=null&&Math.abs(Number(result.net)+Number(result.vat)-Number(result.gross))>0.005)throw fail('Net plus VAT must equal gross');
+ if(['budget','engineering'].includes(section)&&result.net!=null&&result.vat!=null&&result.gross!=null&&Math.abs(Number(result.net)+Number(result.vat)-Number(result.gross))>0.005)throw fail('Net plus VAT must equal gross');
+ if(section==='commercial'&&result.first_sales_month&&!String(result.first_sales_month).endsWith('-01'))throw fail('First sales month must use the first day of month');
  if(section==='document'&&result.sha256&&!/^[a-f0-9]{64}$/.test(String(result.sha256)))throw fail('Invalid SHA-256');
  return result;
 }
@@ -63,15 +67,7 @@ function evidenceCurrent(r:Row){return !r.evidence_id||(r.current_evidence_versi
 export function itemReady(r:Row){return ['Resolved','Not applicable'].includes(r.status)&&evidenceCurrent(r);}
 const itemSelect=`SELECT i.*,i.source_date::text,e.version current_evidence_version,e.file_version current_file_version,e.verification_status evidence_status,e.document_status,e.title evidence_title FROM finance_os.debt_application_items i LEFT JOIN finance_os.evidence e ON e.id=i.evidence_id WHERE i.application_id=$1 ORDER BY i.section,i.code`;
 const psbSelect=`SELECT p.*,p.source_date::text,p.period_start::text,p.period_end::text,e.version current_evidence_version,e.file_version current_file_version,e.verification_status evidence_status,e.document_status FROM finance_os.debt_psb_entries p LEFT JOIN finance_os.evidence e ON e.id=p.evidence_id WHERE p.application_id=$1 ORDER BY p.workbook_row`;
-export function psbSummary(rows:Row[],payment:number){
- const ready=rows.length===PSB_ROWS.length&&rows.every(r=>['Reviewed','Not applicable'].includes(r.status)&&evidenceCurrent(r));
- const total=(kind:string)=>round(rows.filter(r=>r.kind===kind).reduce((s,r)=>s+(r.status==='Not applicable'?0:Number(r.monthly_amount??0)),0));
- const income=ready?total('income'):null;const expenses=ready?total('expense'):null;
- return {ready,complete:rows.filter(r=>['Reviewed','Not applicable'].includes(r.status)&&evidenceCurrent(r)).length,total:PSB_ROWS.length,
- monthly_income:income,monthly_expenses:expenses,annual_income:ready?round(income!*12):null,annual_expenses:ready?round(expenses!*12):null,monthly_surplus:ready?round(income!-expenses!):null,after_proposed_payment:ready?round(income!-expenses!-payment):null,
- affordability:!ready?'Unknown — complete private PSB':income!-expenses!<payment?'Shortfall — founder review required':'Indicative surplus — lender assessment still required',
- rule:'Ongoing personal net income and expenses for the first month after the loan; do not enter the proposed new loan repayment in existing credit. The indicative repayment is deducted once here. No KLPS/Sovereign income is inferred.'};
-}
+export function psbSummary(rows:Row[],payment:number,checkpoint?:Row|null){return reconciliationSummary(rows,payment,checkpoint);}
 export function budgetSummary(items:Row[],requested:number){
  const lines=items.filter(r=>r.section==='budget'&&r.status!=='Not applicable'&&r.data.eligibility!=='Ineligible');
  const sum=(rows:Row[])=>round(rows.reduce((s,r)=>s+(r.data.gross==null?0:Number(r.data.gross)),0));
@@ -84,8 +80,8 @@ export async function initialiseDebtApplication(actor:string,db:Db){
  const result=await db.query(`INSERT INTO finance_os.debt_applications(company_id,applicant_id,application_key,product,partner,requested_amount,term_months,indicative_rate,rate_source,rate_as_of) VALUES($1,$2,$3,'Start Up Loans','GC Business Finance',7000,60,0.075,$4,'2026-09-23') ON CONFLICT(company_id,applicant_id,application_key) DO NOTHING RETURNING *`,[companies[0].id,actor,TEMPLATE_VERSION,'https://www.startuploans.co.uk/support-and-guidance/frequently-asked-questions/changes-to-interest-rate-and-eligibility']);
  if(!result.rows[0])return (await db.query('SELECT id FROM finance_os.debt_applications WHERE company_id=$1 AND applicant_id=$2 AND application_key=$3',[companies[0].id,actor,TEMPLATE_VERSION])).rows[0];
  const app=result.rows[0];await history(app.id,app.id,'application',1,app,actor,db);
- for(const s of SEEDS){
-  const r=(await db.query(`INSERT INTO finance_os.debt_application_items(application_id,code,section,title,application_field,status,data,source,source_date,classification,next_action,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'2026-09-23',$9,$10,$11) RETURNING *`,[app.id,s.code,s.section,s.title,s.field,s.status??'Missing',JSON.stringify(validateData(s.section,s.data)),s.source??'Pass 1 audit, 23 September 2026; review against canonical evidence before use',s.classification??'Unknown',s.action,actor])).rows[0];
+ for(const s of [...SEEDS,...PASS3_BUSINESS_ITEMS.filter(s=>!SEEDS.some(old=>old.code===s.code))]){
+  const r=(await db.query(`INSERT INTO finance_os.debt_application_items(application_id,code,section,title,application_field,status,data,source,source_date,classification,next_action,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'2026-09-23',$9,$10,$11) RETURNING *`,[app.id,s.code,s.section,s.title,s.field,s.status??'Missing',JSON.stringify(validateData(s.section,s.data)),('source' in s?s.source:null)??'Internal preparation; founder hypothesis requires evidence review',s.classification??'Unknown',s.action,actor])).rows[0];
   await history(app.id,r.id,'item',1,r,actor,db);
  }
  for(const r of PSB_ROWS){
@@ -112,10 +108,12 @@ export async function getDebtWorkspace(actor:string,db:Db=pool):Promise<Record<s
  const results=[];
  for(const app of apps){
   const items=(await db.query(itemSelect,[app.id])).rows.map(r=>({...r,ready:itemReady(r)}));
-  const psbRows=(await db.query(psbSelect,[app.id])).rows;const payment=indicativePayment(Number(app.requested_amount),app.term_months,Number(app.indicative_rate));const psb=psbSummary(psbRows,payment.monthly);
+  const psbRows=(await db.query(psbSelect,[app.id])).rows;const checkpoint=await latestPsbReconciliation(app.id,db);const payment=indicativePayment(Number(app.requested_amount),app.term_months,Number(app.indicative_rate));const psb=psbSummary(psbRows,payment.monthly,checkpoint);
+  const affordabilityItem=items.find(i=>i.code==='affordability');if(affordabilityItem)affordabilityItem.ready=affordabilityItem.ready&&(psb.working_reconciled||psb.ready);
+  const gates=readinessGates(items,psb,position,app,budgetSummary(items,Number(app.requested_amount)));
   results.push({application:app,items,payment,budget:budgetSummary(items,Number(app.requested_amount)),
-   summary:{psb:{ready:psb.ready,complete:psb.complete,total:psb.total},affordability:psb.affordability,
-    cash_flow_ready:position.cash.value!==null&&!!app.forecast_start&&items.filter(r=>['forecast','financial'].includes(r.section)||r.code==='forecast-loan').every(r=>r.ready)&&psb.ready,
+   cash_flow_preview:gates.find(g=>g.id==='D')!.ready?cashFlowPreview(items,position,app):null,summary:{psb:{ready:psb.ready,working_reconciled:psb.working_reconciled,complete:psb.complete,total:psb.total,evidence_follow_up:psb.evidence_follow_up},affordability:psb.working_reconciled?'Working PSB reconciled; private evidence/commitment follow-up remains':psb.ready?'PSB reviewed; lender assessment still required':'Private PSB reconciliation required',gates,application_ready:false,changes_since_pass2:checkpoint?'Founder working PSB reconciliation recorded privately. Business cash, quotes, economics, commercial timing, fallback and usable workbook remain separate gates.':'Private reconciliation not yet recorded',
+    cash_flow_ready:position.cash.value!==null&&!!app.forecast_start&&items.filter(r=>['forecast','financial'].includes(r.section)||r.code==='forecast-loan').every(r=>r.ready)&&(psb.working_reconciled||psb.ready)&&gates.find(g=>g.id==='D')!.ready,
     complete:items.filter(r=>r.ready).length,total:items.length,blockers:items.filter(r=>!r.ready&&r.section!=='document').map(r=>({code:r.code,title:r.title,next_action:r.next_action,section:r.section})),
     unresolved_contradictions:items.filter(r=>r.section==='reconciliation'&&!r.ready).length,documents_ready:items.filter(r=>r.section==='document'&&!r.code.startsWith('original-')&&r.ready).length,documents_total:items.filter(r=>r.section==='document'&&!r.code.startsWith('original-')).length},
    history:(await db.query('SELECT id,entity_id,entity_kind,entity_version,snapshot,recorded_at FROM finance_os.debt_application_history WHERE application_id=$1 ORDER BY recorded_at DESC,id',[app.id])).rows});
@@ -134,7 +132,7 @@ export async function updateDebtApplication(id:string,input:Input,actor:string,d
 }
 export async function saveDebtItem(appId:string,itemId:string|null,input:Input,actor:string,db:Db){
  only(input,['version','section','title','application_field','status','data','source','source_date','evidence_id','evidence_version','evidence_file_version','locator','classification','rationale','next_action','owner','review_confirmed']);
- await application(appId,actor,db,true);
+ const app=await application(appId,actor,db,true);
  const old=itemId?(await db.query('SELECT * FROM finance_os.debt_application_items WHERE id=$1 AND application_id=$2 FOR UPDATE',[uuid(itemId),appId])).rows[0]:null;
  if(itemId&&!old)throw fail('Item not found',404);
  if(old&&old.version!==version(input.version))throw fail('Item changed; reload before saving',409);
@@ -150,10 +148,18 @@ export async function saveDebtItem(appId:string,itemId:string|null,input:Input,a
  if(section==='budget'&&(!data.description||!data.purpose))throw fail('A business requirement and purpose are required for a budget line');
  if(status==='Resolved'){
   if(input.review_confirmed!==true||!source||!sourceDate||['Unknown','Conflict'].includes(classification))throw fail('Resolution requires explicit review, dated source and a resolved classification');
-  if((classification==='Extracted fact'||section==='document'||section==='budget')&&!ev.id)throw fail('Canonical evidence is required for this resolution');
+  if((classification==='Extracted fact'||section==='document'||section==='budget'||section==='engineering')&&!ev.id)throw fail('Canonical evidence is required for this resolution');
   if(ev.id&&ev.verification_status!=='Verified')throw fail('Resolved items require verified evidence');
   if(section==='forecast'&&(data.cash_direction==='Unresolved'||!data.basis||Array.from({length:12},(_,i)=>data[`m${i+1}`]).some(v=>v==null)))throw fail('Twelve explicit monthly inputs, cash direction and cash timing basis are required');
   if(section==='budget'&&(data.gross==null||data.net==null||data.vat==null||data.quantity==null||!data.supplier||!data.description||!data.purpose||!data.milestone||!data.payment_date||data.eligibility!=='Confirmed'||!data.eligibility_basis))throw fail('Resolved budget needs priced scope, timing, purpose, milestone and confirmed eligibility');
+  if(section==='engineering'&&(!data.scope||!data.deliverables||data.net==null||data.vat==null||data.gross==null||!data.payment_milestones||!data.lead_time||!data.ip_terms||!data.scope_limits))throw fail('Engineering quote gate requires scoped deliverables, price/VAT, timing, IP terms and explicit scope limits');
+  if(section==='economics'&&(data.proposed_retail_price==null||!data.vat_treatment||data.landed_unit_cost==null||!data.production_path||!data.calculation_basis))throw fail('Product economics require a price assumption, VAT, evidenced unit-cost basis and production path');
+  if(old?.code==='commercial-6'&&!data.launch_criteria)throw fail('Record product launch criteria or an explicit no-sales case');
+  if(old?.code==='forecast-sales'&&Array.from({length:12},(_,i)=>Number(data[`m${i+1}`]??0)).some(v=>v>0)){
+   const timing=(await db.query(itemSelect,[appId])).rows.find(r=>r.code==='commercial-6');
+   if(!app.forecast_start||!timing||!itemReady(timing)||!timing.data.first_sales_month||!timing.data.launch_criteria)throw fail('Positive product receipts require explicit reviewed launch criteria and first sales month');
+   const start=new Date(app.forecast_start);for(let i=0;i<12;i++){const month=new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+i,1)).toISOString().slice(0,10);if(Number(data[`m${i+1}`]??0)>0&&month<timing.data.first_sales_month)throw fail('Product receipts precede the justified first sales month');}
+  }
   if(['financial','commercial','requirement'].includes(section)&&!data.finding)throw fail('A substantive finding is required');
   if(section==='reconciliation'&&!data.prospective)throw fail('Prospective wording is required');
  }
@@ -163,25 +169,45 @@ export async function saveDebtItem(appId:string,itemId:string|null,input:Input,a
  const row=(await db.query(`INSERT INTO finance_os.debt_application_items(id,application_id,code,section,title,application_field,status,data,source,source_date,evidence_id,evidence_version,evidence_file_version,locator,classification,rationale,next_action,owner,version,updated_by) VALUES(${params.map((_,i)=>`$${i+1}`).join(',')}) ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,application_field=EXCLUDED.application_field,status=EXCLUDED.status,data=EXCLUDED.data,source=EXCLUDED.source,source_date=EXCLUDED.source_date,evidence_id=EXCLUDED.evidence_id,evidence_version=EXCLUDED.evidence_version,evidence_file_version=EXCLUDED.evidence_file_version,locator=EXCLUDED.locator,classification=EXCLUDED.classification,rationale=EXCLUDED.rationale,next_action=EXCLUDED.next_action,owner=EXCLUDED.owner,version=EXCLUDED.version,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING *`,params)).rows[0];
  await history(appId,id,'item',v,row,actor,db);return {id,version:v};
 }
-export async function getPrivatePsb(id:string,actor:string,db:Db=pool){
- const app=await application(id,actor,db);const entries=(await db.query(psbSelect,[id])).rows;
- return {entries,summary:psbSummary(entries,indicativePayment(Number(app.requested_amount),app.term_months,Number(app.indicative_rate)).monthly),history:(await db.query('SELECT entry_id,entry_version,snapshot,recorded_at FROM finance_os.debt_psb_history WHERE application_id=$1 ORDER BY recorded_at DESC',[id])).rows};
+async function latestPsbReconciliation(id:string,db:Db){return (await db.query('SELECT *,source_date::text FROM finance_os.debt_psb_reconciliations WHERE application_id=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1',[id])).rows[0]??null;}
+export async function getPrivatePsb(id:string,actor:string,db:Db=pool):Promise<Record<string,any>>{
+ if(db===pool){const c=await pool.connect();try{await c.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');const result=await getPrivatePsb(id,actor,c);await c.query('COMMIT');return result;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
+ const app=await application(id,actor,db);const entries=(await db.query(psbSelect,[id])).rows;const reconciliation=await latestPsbReconciliation(id,db);
+ return {entries,reconciliation,classifications:PSB_CLASSIFICATIONS,summary:psbSummary(entries,indicativePayment(Number(app.requested_amount),app.term_months,Number(app.indicative_rate)).monthly,reconciliation),history:(await db.query('SELECT entry_id,entry_version,snapshot,recorded_at FROM finance_os.debt_psb_history WHERE application_id=$1 ORDER BY recorded_at DESC',[id])).rows};
+}
+export async function reconcilePrivatePsb(id:string,input:Input,actor:string,db:Db){
+ const app=await application(id,actor,db,true);const value=validatePrivateContext(input);const rows=(await db.query(psbSelect,[id])).rows;
+ const prior=await latestPsbReconciliation(id,db);
+ if((prior?.id??null)!==(input.previous_reconciliation_id??null)||rows.some(r=>!(input.entry_versions as Row[]).some(v=>v.id===r.id&&v.version===r.version)))throw fail('Private inputs or disclosures changed; reload before reconciling',409);
+ const summary=psbSummary(rows,indicativePayment(Number(app.requested_amount),app.term_months,Number(app.indicative_rate)).monthly);
+ if(!summary.inputs_complete)throw fail('Complete and classify every official PSB category before reconciliation');
+ if(summary.monthly_income!==value.expected_income||summary.monthly_expenses!==value.expected_expenses)throw fail('Official PSB category totals differ from the approved totals; reconciliation stopped');
+ for(const r of rows)validateComponents(r.components??[],r.monthly_amount==null?null:Number(r.monthly_amount));
+ const mappedTotals=new Map<number,number>();
+ for(const c of value.commitments.filter(c=>c.included_psb_row!=null&&c.monthly_payment!=null))mappedTotals.set(c.included_psb_row!,(mappedTotals.get(c.included_psb_row!)??0)+Math.round(c.monthly_payment!*100));
+ for(const [row,total] of mappedTotals){const mapped=rows.find(r=>r.workbook_row===row);if(!mapped||mapped.monthly_amount==null||Math.round(Number(mapped.monthly_amount)*100)<total)throw fail('Disclosed monthly commitments exceed their mapped PSB category');}
+ const {expected_income,expected_expenses,...snapshot}=value;
+ const row=(await db.query(`INSERT INTO finance_os.debt_psb_reconciliations(application_id,source,source_date,source_sha256,entry_versions,policy,commitments,exclusions,warnings,actor_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[id,snapshot.source,snapshot.source_date,snapshot.source_sha256,JSON.stringify(rows.map(r=>({id:r.id,version:r.version}))),JSON.stringify(PSB_POLICY),JSON.stringify(snapshot.commitments),JSON.stringify(snapshot.exclusions),JSON.stringify(snapshot.warnings),actor])).rows[0];
+ return {id:row.id,status:'Working reconciliation recorded; application not submitted'};
 }
 export async function savePrivatePsb(id:string,entryId:string,input:Input,actor:string,db:Db){
- only(input,['version','monthly_amount','status','source','source_date','period_start','period_end','evidence_id','evidence_version','evidence_file_version','locator','rationale','review_confirmed']);
+ only(input,['version','monthly_amount','status','source','source_date','period_start','period_end','evidence_id','evidence_version','evidence_file_version','locator','rationale','review_confirmed','classification','components']);
  await application(id,actor,db,true);
  const old=(await db.query('SELECT * FROM finance_os.debt_psb_entries WHERE id=$1 AND application_id=$2 FOR UPDATE',[uuid(entryId),id])).rows[0];
  if(!old)throw fail('PSB entry not found',404);if(old.version!==version(input.version))throw fail('PSB entry changed; reload',409);
- const monthly=amount(input.monthly_amount),status=choose(input.status,['Missing','Provisional','Reviewed','Not applicable'],'PSB status');
+ const monthly=amount(input.monthly_amount),status=choose(input.status,['Missing','Provisional','Working reconciled','Reviewed','Not applicable'],'PSB status');
  const source=optional(input.source),rationale=required(input.rationale,'Reason'),sourceDate=pastDate(input.source_date),start=pastDate(input.period_start),end=pastDate(input.period_end),locator=optional(input.locator);
  // This intake stores extracted figures and short provenance, never banking secrets/full card data.
  for(const value of [source,rationale,locator])if(value.length>1500||/(?:\d[ -]?){12,19}|\b(?:password|pin|cvv|cvc|iban|account number|sort code)\s*[:=]/i.test(value))throw fail('Use short provenance notes only; do not enter credentials, card/account numbers or credit-report details');
  if(start&&end&&end<start)throw fail('Evidence period end precedes start');
+ const classification=choose(input.classification??old.classification,PSB_CLASSIFICATIONS,'PSB classification');
+ const components=validateComponents(input.components??old.components,monthly);
+ if(status==='Working reconciled'&&(input.review_confirmed!==true||monthly===null||!source||!sourceDate||classification==='Unclassified'||classification==='Not applicable'))throw fail('Working reconciliation requires explicit founder confirmation, amount, dated source and classification');
  const ev=await linkEvidence(input,db);
  if(status==='Reviewed'&&(input.review_confirmed!==true||monthly===null||!source||!sourceDate||!start||!end))throw fail('Reviewed PSB figures require amount, source/date, evidence period and explicit confirmation');
  if(status==='Reviewed'&&ev.id&&ev.verification_status!=='Verified')throw fail('Linked PSB evidence must be verified before review');
  if(status==='Not applicable'&&(monthly!==null||input.review_confirmed!==true))throw fail('Non-applicable entries require a blank amount, explicit confirmation and reason');
- const row=(await db.query(`UPDATE finance_os.debt_psb_entries SET monthly_amount=$3,status=$4,source=$5,source_date=$6,period_start=$7,period_end=$8,evidence_id=$9,evidence_version=$10,evidence_file_version=$11,locator=$12,rationale=$13,version=version+1,updated_at=now() WHERE id=$1 AND application_id=$2 RETURNING *`,[entryId,id,monthly,status,source,sourceDate,start,end,ev.id,ev.version,ev.file_version??null,locator,rationale])).rows[0];
+ const row=(await db.query(`UPDATE finance_os.debt_psb_entries SET monthly_amount=$3,status=$4,source=$5,source_date=$6,period_start=$7,period_end=$8,evidence_id=$9,evidence_version=$10,evidence_file_version=$11,locator=$12,rationale=$13,classification=$14,components=$15,version=version+1,updated_at=now() WHERE id=$1 AND application_id=$2 RETURNING *`,[entryId,id,monthly,status,source,sourceDate,start,end,ev.id,ev.version,ev.file_version??null,locator,rationale,classification,JSON.stringify(components)])).rows[0];
  await db.query('INSERT INTO finance_os.debt_psb_history(application_id,entry_id,entry_version,snapshot,actor_id) VALUES($1,$2,$3,$4,$5)',[id,entryId,row.version,JSON.stringify(row),actor]);return {id:entryId,version:row.version};
 }
 export async function addDebtInteraction(id:string,input:Input,actor:string,db:Db){
@@ -193,5 +219,5 @@ export async function addDebtInteraction(id:string,input:Input,actor:string,db:D
 export async function recordDebtReview(id:string,input:Input,actor:string,db:Db){
  only(input,['reason','review_confirmed']);const app=await application(id,actor,db,true);if(input.review_confirmed!==true)throw fail('Explicit founder review is required');
  const items=(await db.query(itemSelect,[id])).rows;const psb=(await db.query(psbSelect,[id])).rows;
- const review=randomUUID();await history(id,review,'review',1,{reason:required(input.reason,'Review reason'),status:'Internal review only — not submitted',application_version:app.version,template_version:TEMPLATE_VERSION,items:items.map(r=>({id:r.id,version:r.version,ready:itemReady(r),evidence_id:r.evidence_id,evidence_version:r.evidence_version,file_version:r.evidence_file_version})),private_psb_versions:psb.map(r=>({id:r.id,version:r.version})),budget:budgetSummary(items,Number(app.requested_amount)),position:await existingPosition(db)},actor,db);return {id:review};
+ const review=randomUUID();await history(id,review,'review',1,{reason:required(input.reason,'Review reason'),status:'Internal review only — not submitted',application_version:app.version,template_version:TEMPLATE_VERSION,items:items.map(r=>({id:r.id,version:r.version,ready:itemReady(r),evidence_id:r.evidence_id,evidence_version:r.evidence_version,file_version:r.evidence_file_version})),private_psb_reconciliation_id:(await latestPsbReconciliation(id,db))?.id??null,private_psb_versions:psb.map(r=>({id:r.id,version:r.version})),budget:budgetSummary(items,Number(app.requested_amount)),position:await existingPosition(db)},actor,db);return {id:review};
 }

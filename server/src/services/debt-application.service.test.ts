@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
-import { amount, indicativePayment, validateData, budgetSummary, itemReady, psbSummary, initialiseDebtApplication, getDebtWorkspace, updateDebtApplication, saveDebtItem, getPrivatePsb, savePrivatePsb, addDebtInteraction, recordDebtReview } from './debt-application.service';
+import { amount, indicativePayment, validateData, budgetSummary, itemReady, psbSummary, initialiseDebtApplication, getDebtWorkspace, updateDebtApplication, saveDebtItem, getPrivatePsb, savePrivatePsb, reconcilePrivatePsb, addDebtInteraction, recordDebtReview } from './debt-application.service';
 import { PSB_ROWS, SEEDS, WORKBOOK } from './debt-application.template';
 import { requirePrivateFinance } from '../middleware/finance-private';
 
@@ -71,6 +71,7 @@ test('real PostgreSQL: migration, private scope, full edits, immutable provenanc
   await db.query("INSERT INTO finance_os.evidence VALUES($1,'Original workbook',1,1,$2,'Verified','Active')",[evidence,WORKBOOK.sha256]);
   await db.query(readFileSync('server/sql/20260915_fundraising_readiness.sql','utf8'));
   await db.query(readFileSync('server/sql/20260923_debt_application_workspace.sql','utf8'));
+  await db.query(readFileSync('server/sql/20260924_debt_psb_reconciliation.sql','utf8'));
   const app=await tx(()=>initialiseDebtApplication(owner,db));assert.equal((await tx(()=>initialiseDebtApplication(owner,db))).id,app.id);
   let w=await getDebtWorkspace(owner,db);assert.equal(w.applications.length,1);let a=w.applications[0];
   assert.equal(a.budget.unallocated,5806);assert.equal(a.summary.cash_flow_ready,false);assert.equal(w.position.cash.value,null);
@@ -83,6 +84,24 @@ test('real PostgreSQL: migration, private scope, full edits, immutable provenanc
   await assert.rejects(()=>tx(()=>savePrivatePsb(app.id,p.entries[0].id,input,owner,db)),/changed/);
   await assert.rejects(()=>tx(()=>savePrivatePsb(app.id,p.entries[1].id,{...input,source:'password: secret'},owner,db)),/credentials/);
   await assert.rejects(()=>tx(()=>savePrivatePsb(app.id,p.entries[1].id,{...input,status:'Not applicable'},owner,db)),/blank amount/);
+  // Synthetic working intake: no real personal figures belong in committed tests.
+  const working={...input,status:'Working reconciled',classification:'Founder-confirmed recurring amount',source:'PRIVATE_SYNTHETIC_SOURCE',period_start:null,period_end:null};
+  for(const entry of (await getPrivatePsb(app.id,owner,db)).entries){const isIncome=entry.workbook_row===25,isExpense=entry.workbook_row===49;await tx(()=>savePrivatePsb(app.id,entry.id,{...working,version:entry.version,monthly_amount:isIncome?2100:isExpense?1600:null,status:isIncome||isExpense?'Working reconciled':'Not applicable',classification:isIncome||isExpense?working.classification:'Not applicable'},owner,db));}
+  const context={entry_versions:(await getPrivatePsb(app.id,owner,db)).entries.map((e:any)=>({id:e.id,version:e.version})),previous_reconciliation_id:null,source:'PRIVATE_SYNTHETIC_CHECKPOINT',source_date:'2026-09-20',commitments:[{label:'PRIVATE_SYNTHETIC_DEBT',kind:'temporary',balance:120,monthly_payment:null,basis:'Instalment timing pending',classification:'Founder statement'}],exclusions:[],warnings:['PRIVATE_SYNTHETIC_WARNING'],expected_income:2100,expected_expenses:1600,review_confirmed:true};
+  await assert.rejects(()=>tx(()=>reconcilePrivatePsb(app.id,{...context,expected_expenses:1601},owner,db)),/totals differ/);
+  await assert.rejects(()=>tx(()=>reconcilePrivatePsb(app.id,{...context,commitments:[1,2].map(()=>({...context.commitments[0],monthly_payment:1000,included_psb_row:49}))},owner,db)),/exceed/);
+  await assert.rejects(()=>tx(()=>reconcilePrivatePsb(app.id,context,other,db)),/not found/);
+  await tx(()=>reconcilePrivatePsb(app.id,context,owner,db));
+  await assert.rejects(()=>tx(()=>reconcilePrivatePsb(app.id,context,owner,db)),/changed/);
+  assert.equal((await getPrivatePsb(app.id,owner,db)).summary.working_reconciled,true);
+  assert.equal((await getPrivatePsb(app.id,owner,db)).summary.ready,false);
+  assert.equal((await getDebtWorkspace(owner,db)).applications[0].summary.psb.working_reconciled,true);
+  await tx(()=>recordDebtReview(app.id,{reason:'Synthetic reconciliation review',review_confirmed:true},owner,db));
+  assert.equal(JSON.stringify(await getDebtWorkspace(owner,db)).includes('PRIVATE_SYNTHETIC'),false);
+  await assert.rejects(()=>db.query('DELETE FROM finance_os.debt_psb_reconciliations'),/append-only/);
+  const changed=(await getPrivatePsb(app.id,owner,db)).entries[0];
+  await tx(()=>savePrivatePsb(app.id,changed.id,{...working,version:changed.version,monthly_amount:2101},owner,db));
+  assert.equal((await getDebtWorkspace(owner,db)).applications[0].summary.psb.working_reconciled,false);
   const publicView=JSON.stringify(await getDebtWorkspace(owner,db));assert.equal(publicView.includes('Personal payslips'),false);assert.equal(publicView.includes('monthly_amount'),false);assert.equal(publicView.includes('Continuing net employment income'),false);
   const doc=a.items.find((i:any)=>i.code==='original-workbook');
   const docInput={version:1,data:doc.data,status:'Resolved',classification:'Extracted fact',source:'Original official download',source_date:'2026-09-23',evidence_id:evidence,evidence_version:1,evidence_file_version:1,locator:'Whole workbook',rationale:'Checksum verified, original preserved; defects remain',review_confirmed:true,next_action:'Await replacement template'};
@@ -93,8 +112,9 @@ test('real PostgreSQL: migration, private scope, full edits, immutable provenanc
   await db.query('UPDATE finance_os.evidence SET file_version=2 WHERE id=$1',[evidence]);
   a=(await getDebtWorkspace(owner,db)).applications[0];assert.equal(a.items.find((i:any)=>i.id===doc.id).ready,false);
   await assert.rejects(()=>tx(()=>saveDebtItem(app.id,doc.id,{...docInput,version:2},owner,db)),/Evidence version changed/);
-  const forecast=a.items.find((i:any)=>i.section==='forecast');
+  const forecast=a.items.find((i:any)=>i.code==='forecast-sales');
   await assert.rejects(()=>tx(()=>saveDebtItem(app.id,forecast.id,{...docInput,evidence_id:null,data:{basis:'No unsupported receipts'},classification:'Assumption'},owner,db)),/Twelve explicit/);
+  await assert.rejects(()=>tx(()=>saveDebtItem(app.id,forecast.id,{...docInput,evidence_id:null,data:{...Object.fromEntries(Array.from({length:12},(_,i)=>[`m${i+1}`,100])),cash_direction:'Cash receipt',basis:'Unsupported sales'},classification:'Assumption'},owner,db)),/first sales month/);
   const fdata=Object.fromEntries(Array.from({length:12},(_,i)=>[`m${i+1}`,0]));
   await tx(()=>saveDebtItem(app.id,forecast.id,{...docInput,evidence_id:null,data:{...fdata,cash_direction:'Cash receipt',basis:'Explicit zero based on founder-reviewed no-sales timing'},classification:'Assumption'},owner,db));
   const newBudget=await tx(()=>saveDebtItem(app.id,null,{section:'budget',title:'Controlled prototype testing',application_field:'BP use of funds',status:'External evidence',data:{description:'Controlled strain tests',purpose:'Validate measurement repeatability'},classification:'Unknown',rationale:'Quote needed',next_action:'Request scope and quote'},owner,db));assert.ok(newBudget.id);

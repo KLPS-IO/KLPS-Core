@@ -1,16 +1,18 @@
+import { ECONOMICS_FIELDS, ENGINEERING_FIELDS } from './debt-readiness';
 // Versioned intake definition, independent of workbook presentation. No source document is rewritten.
 export const TEMPLATE_VERSION = 'startup-loans-pass2-v1';
 export const WORKBOOK = {filename:'business-plan-template-start-up-loans-2026.xlsx',sha256:'ba0ed191912d09463047e4d6183cdb35e21e56af92ca67e086edf040e8555ef7'};
 export const GUIDE = {filename:'the-start-up-loans-company-business-plan-guide-nov2020-pdf-611kb.pdf',sha256:'57cda590ad7bdae27a84f8a9ebce5cde3e3c561053203811fec789f39f193527'};
-export type Section = 'requirement'|'financial'|'budget'|'commercial'|'reconciliation'|'forecast'|'document';
-export type Field = {key:string;label:string;type:'text'|'money'|'number'|'date'|'select';options?:string[]};
+export type Section = 'requirement'|'financial'|'budget'|'commercial'|'reconciliation'|'forecast'|'document'|'economics'|'engineering';
+export type Field = {key:string;label:string;type:'text'|'money'|'signed_money'|'number'|'date'|'select';options?:string[]};
 const text=(key:string,label:string):Field=>({key,label,type:'text'});
 const money=(key:string,label:string):Field=>({key,label,type:'money'});
 const select=(key:string,label:string,options:string[]):Field=>({key,label,type:'select',options});
 export const FIELDS:Record<Section,Field[]> = {
+ economics:ECONOMICS_FIELDS,engineering:ENGINEERING_FIELDS,
  requirement:[text('finding','Finding / response')],
  financial:[text('finding','Evidenced position and limitations'),money('amount','Amount, only if established (£)'),text('basis','Scope / period / treatment')],
- commercial:[text('finding','Current proposition or assumption'),money('amount','Price or direct cost, if established (£)'),text('basis','Evidence, customer and timing basis')],
+ commercial:[text('finding','Current proposition or assumption'),money('amount','Price or direct cost, if established (£)'),text('basis','Evidence, customer and timing basis'),{key:'first_sales_month',label:'First justified sales month (first day)',type:'date'},text('launch_criteria','Product launch criteria / explicit no-sales basis')],
  reconciliation:[text('historical','Historical claim (preserved)'),text('current','Current evidence'),text('prospective','Prospective wording / resolution')],
  budget:[text('description','Business requirement'),text('supplier','Supplier'),text('category','Category'),{key:'quantity',label:'Quantity',type:'number'},money('net','Total net (£)'),money('vat','Total VAT (£)'),money('gross','Total gross (£)'),{key:'payment_date',label:'Expected payment date',type:'date'},text('purpose','Business purpose'),text('milestone','Milestone enabled'),select('priority','Priority',['Unresolved','Essential','Desirable']),text('alternative','Alternative supplier / option'),select('eligibility','Loan eligibility',['Unresolved','Confirmed','Ineligible']),text('eligibility_basis','Eligibility confirmation / reference'),select('confidence','Confidence',['Unknown','Low','Medium','High'])],
  forecast:[select('cash_direction','Cash direction',['Unresolved','Cash receipt','Cash payment']),...Array.from({length:12},(_,i)=>money(`m${i+1}`,`Month ${i+1} (£)`)),text('basis','Cash timing and no-investment basis')],
