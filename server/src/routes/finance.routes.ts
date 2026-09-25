@@ -10,7 +10,6 @@ import { addActivity, getReadiness, initialiseReadiness, saveScenario, updateReq
 import multer from "multer";
 import {
   DataRoomRequest,
-  hasAcceptedCurrentNda,
   requireAuthorised,
   requireDataRoomAuth
 } from "../services/data-room.service";
@@ -129,27 +128,6 @@ const asyncHandler =
         handler(req as DataRoomRequest, res)
       ).catch(next);
 
-const ndaMiddleware = async (
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-) => {
-  const result =
-    await hasAcceptedCurrentNda(
-      (req as DataRoomRequest).dataRoomUser!.id
-    );
-
-  if (!result.accepted) {
-    return res.status(403).json({
-      status: "error",
-      code: "nda_required",
-      message: "Current NDA must be accepted",
-      nda_version: result.nda?.version ?? null
-    });
-  }
-
-  next();
-};
 
 export const requireFinanceWrite = (
   req: DataRoomRequest,
@@ -242,7 +220,6 @@ const assumptionUpdateFields = [
 router.use(
   requireDataRoomAuth,
   requireAuthorised,
-  ndaMiddleware,
   requirePrivateFinance
 );
 router.get('/readiness', asyncHandler(async (_req,res) => res.json(jsonOk(await getReadiness()))));

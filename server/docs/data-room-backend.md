@@ -180,7 +180,7 @@ Stores `scroll_completion_required: true`, `acceptance_method: clickwrap`, and t
 
 ### GET `/api/data-room/documents`
 
-Requires authorised session and accepted current NDA.
+Requires an authorised session. NDA acceptance is not required; existing document access tiers still apply.
 
 Response:
 
@@ -292,7 +292,7 @@ Register document request:
 - Login is rate-limited through `data_room.login_attempts`.
 - Sessions are opaque, hashed in the database, expiring, and revocable.
 - Revoked users lose access immediately because session validation and signed document URL access both check current user role.
-- NDA acceptance is one row per `(user_id, nda_version)`. A new active NDA version forces re-acceptance.
+- NDA acceptance is one row per `(user_id, nda_version)`. NDA records are retained for history, but an active version does not gate access. `/nda/status` reports `required: false`.
 - Document IDs alone do not grant access. The server checks role, document activity, NDA acceptance, and signed URL validity.
 - `data_room.access_events` has triggers blocking update/delete to keep logs append-only at the database layer.
 - Production rejects non-HTTPS requests after proxy headers are trusted.
@@ -332,3 +332,7 @@ Railway's managed database backups should still be enabled. These scripts are th
 7. Gate documents behind `/nda/status`, `/nda/current`, and `/nda/accept`.
 8. Replace public document links with `/documents/:id/url`.
 9. Expose founder-only controls from the `/admin/*` endpoints.
+
+### NDA access policy (25 September 2026)
+
+Authorised data-room users can access documents permitted by their existing tier without accepting an NDA. Historical tier identifiers such as `investor_nda` remain for compatibility and do not impose an NDA requirement. Finance OS remains founder-only. Historical acceptance records and optional NDA endpoints are retained; no acceptance is manufactured during this change.

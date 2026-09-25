@@ -96,27 +96,6 @@ const toStorageKey = (filename: string) => {
   return `data-room/${Date.now()}-${safeFilename || "document"}`;
 };
 
-const requireNdaMiddleware = async (
-  req: DataRoomRequest,
-  res: express.Response,
-  next: express.NextFunction
-) => {
-  const result =
-    await hasAcceptedCurrentNda(
-      req.dataRoomUser!.id
-    );
-
-  if (!result.accepted) {
-    return res.status(403).json({
-      status: "error",
-      code: "nda_required",
-      message: "Current NDA must be accepted",
-      nda_version: result.nda?.version ?? null
-    });
-  }
-
-  next();
-};
 
 const sendSessionResponse = async (
   req: DataRoomRequest,
@@ -387,7 +366,7 @@ router.get(
           nda.nda?.version ?? null,
         accepted: nda.accepted,
         accepted_at: nda.acceptedAt ?? null,
-        required: !nda.accepted
+        required: false
       })
     );
   })
@@ -527,7 +506,6 @@ router.get(
   "/categories",
   requireDataRoomAuth,
   requireAuthorised,
-  requireNdaMiddleware,
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
@@ -563,7 +541,6 @@ router.get(
   "/documents",
   requireDataRoomAuth,
   requireAuthorised,
-  requireNdaMiddleware,
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
@@ -619,7 +596,6 @@ router.post(
   "/documents/:id/url",
   requireDataRoomAuth,
   requireAuthorised,
-  requireNdaMiddleware,
   asyncHandler(async (req, res) => {
     const action =
       req.body?.action === "download"
