@@ -297,7 +297,11 @@ router.get("/actions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json
 router.post("/actions/refresh",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({summary:await refreshFinanceActions(req.dataRoomUser!.id)}))));
 router.patch("/actions/:id",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({action:await updateFinanceAction(getParam(req.params.id),requireText(req.body?.status,"status"),requireText(req.body?.change_reason,"change_reason"),req.dataRoomUser!.id)}))));
 router.get("/vat-filings",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({filings:await listVatFilings()}))));
-router.post("/vat-filings",requireFinanceWrite,asyncHandler(async(req,res)=>res.status(201).json(jsonOk({filing:await createVatFiling(req.body??{},req.dataRoomUser!.id)}))));
+router.post("/vat-filings",requireFinanceWrite,asyncHandler(async(req,res)=>{
+  const filing=await createVatFiling(req.body??{},req.dataRoomUser!.id);
+  const action_summary=await refreshFinanceActions(req.dataRoomUser!.id);
+  return res.status(201).json(jsonOk({filing,action_summary}));
+}));
 router.get("/vat-periods/suggest",asyncHandler(async(req,res)=>res.json(jsonOk({vat_period:await suggestVatPeriod(req.query.tax_point_date)}))));
 router.get("/vat-ledger",asyncHandler(async(req,res)=>res.json(jsonOk({
   label:"VAT working paper – not an HMRC submission",

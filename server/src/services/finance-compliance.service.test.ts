@@ -81,3 +81,14 @@ test("compliance event responses omit sensitive VAT identifiers and generic meta
   assert.doesNotMatch(service,/compliance_events[^`]*vat_registration/i);
   assert.match(service,/Unsupported compliance event fields/);
 });
+
+test("filing recording completes and audits both filing actions without exposing the receipt",()=>{
+  const service=readFileSync(path.resolve("server/src/services/finance-compliance.service.ts"),"utf8");
+  const routes=readFileSync(path.resolve("server/src/routes/finance.routes.ts"),"utf8");
+  assert.match(service,/submit_outstanding_vat_return/);
+  assert.match(service,/Finance action machine-verified as completed/);
+  assert.match(service,/verification_source','immutable_vat_filing/);
+  assert.match(routes,/const action_summary=await refreshFinanceActions/);
+  assert.match(service,/true AS hmrc_receipt_recorded/);
+  assert.doesNotMatch(service,/jsonb_build_object\([^)]*hmrc_receipt_id/);
+});
