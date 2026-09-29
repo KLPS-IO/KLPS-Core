@@ -81,9 +81,12 @@ import {
   saveAccountingExportConfig
 } from "../services/accounting-export-config.service";
 import {
+  auditComplianceEventEvidence,
   auditVatFilingEvidence,
+  createComplianceEvent,
   createVatFiling,
   getFinanceCompliance,
+  listComplianceEvents,
   listFinanceActions,
   listVatFilings,
   refreshFinanceActions,
@@ -284,6 +287,12 @@ router.post("/bank-imports/monzo-csv",requireFinanceWrite,bankCsvUpload.single("
   return res.status(result.duplicate_file?200:201).json(jsonOk({import:result}));
 }));
 router.get("/compliance",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({compliance:await getFinanceCompliance()}))));
+router.get("/compliance-events",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({compliance_events:await listComplianceEvents()}))));
+router.post("/compliance-events",requireFinanceWrite,asyncHandler(async(req,res)=>{
+  const event=await createComplianceEvent(req.body??{},req.dataRoomUser!.id);
+  const action_summary=await refreshFinanceActions(req.dataRoomUser!.id);
+  return res.status(event.created?201:200).json(jsonOk({compliance_event:event,action_summary}));
+}));
 router.get("/actions",requireFinanceWrite,asyncHandler(async(_req,res)=>res.json(jsonOk({actions:await listFinanceActions()}))));
 router.post("/actions/refresh",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({summary:await refreshFinanceActions(req.dataRoomUser!.id)}))));
 router.patch("/actions/:id",requireFinanceWrite,asyncHandler(async(req,res)=>res.json(jsonOk({action:await updateFinanceAction(getParam(req.params.id),requireText(req.body?.status,"status"),requireText(req.body?.change_reason,"change_reason"),req.dataRoomUser!.id)}))));
@@ -738,6 +747,7 @@ router.post(
         const link = duplicateLink ?? await createOptionalUploadLink(existing.id, input, req.dataRoomUser!.id, client);
         if (link && !duplicateLink) await auditFinanceAction("evidence.linked", "evidence", existing.id, req.dataRoomUser!.id, client);
         if (link && !duplicateLink && input.linkedEntityType === "vat_filing") await auditVatFilingEvidence("vat_filing_evidence_linked",input.linkedEntityId!,existing.id,input.filingEvidencePurpose!,req.dataRoomUser!.id,client);
+        if (link && !duplicateLink && input.linkedEntityType === "compliance_event") await auditComplianceEventEvidence(input.linkedEntityId!,existing.id,input.relationship!,req.dataRoomUser!.id,client);
         await auditFinanceAction("evidence.reused", "evidence", existing.id, req.dataRoomUser!.id, client);
         await client.query("COMMIT");
         return res.status(200).json(jsonOk({ evidence: publicEvidence(existing), link, evidence_reused: true, link_created: Boolean(link && !duplicateLink), duplicate_link: Boolean(duplicateLink) }));
@@ -749,6 +759,7 @@ router.post(
       const evidence = await finishUploadedEvidenceRecord(created.id, storage.objectKey, client);
       const link = await createOptionalUploadLink(created.id, input, req.dataRoomUser!.id, client);
       if (link && input.linkedEntityType === "vat_filing") await auditVatFilingEvidence("vat_filing_evidence_linked",input.linkedEntityId!,created.id,input.filingEvidencePurpose!,req.dataRoomUser!.id,client);
+      if (link && input.linkedEntityType === "compliance_event") await auditComplianceEventEvidence(input.linkedEntityId!,created.id,input.relationship!,req.dataRoomUser!.id,client);
       await auditFinanceAction("evidence.uploaded","evidence",created.id,req.dataRoomUser!.id,client);
       await client.query("COMMIT");
       return res.status(201).json(jsonOk({ evidence: publicEvidence(evidence), link, evidence_reused: false, link_created: Boolean(link), duplicate_link: false }));

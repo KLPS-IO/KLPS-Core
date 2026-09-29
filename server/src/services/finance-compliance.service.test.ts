@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { deriveExpenseActions,derivePeriodActions, readinessState, reminderState } from "./finance-compliance.service";
+import { deriveComplianceEventActions,deriveExpenseActions,derivePeriodActions, readinessState, reminderState } from "./finance-compliance.service";
 
 test("filing existence is the only submitted readiness input",()=>{
   assert.equal(readinessState({filed:true,deadline:"2026-06-30",today:"2026-08-09",blockers:5,validated:false,exported:false,started:true}),"SUBMITTED");
@@ -49,4 +49,35 @@ test("compliance mutation and filing routes are founder-only",()=>{
   assert.match(routes,/router\.post\("\/actions\/refresh",requireFinanceWrite/);
   assert.match(routes,/router\.post\("\/vat-filings",requireFinanceWrite/);
   assert.match(routes,/router\.get\("\/compliance",requireFinanceWrite/);
+  assert.match(routes,/router\.post\("\/compliance-events",requireFinanceWrite/);
+  assert.match(routes,/router\.get\("\/compliance-events",requireFinanceWrite/);
+});
+
+test("HMRC penalty actions preserve one point, zero money due, and subjective review",()=>{
+  const base={id:"22222222-2222-4222-8222-222222222222",event_type:"vat_late_submission_penalty",vat_period_id:"33333333-3333-4333-8333-333333333333",canonical_period_reference:"26A2",source_period_reference:"07 26",notice_date:"2026-09-18",event_date:"2026-09-15",reason:"Return not received",penalty_points:1,total_penalty_points:1,financial_penalty:"0.00",currency:"GBP",review_deadline:"2026-10-18",review_deadline_source_date:"2026-09-18",review_deadline_rule:"notice_date_plus_30_calendar_days",start_date:"2026-05-01",end_date:"2026-07-31",filing_deadline:"2026-09-07",filed:false};
+  const actions=deriveComplianceEventActions(base);
+  const submit=actions.find(action=>action.action_type==="submit_outstanding_vat_return");
+  const review=actions.find(action=>action.action_type==="decide_hmrc_review");
+  assert.equal(submit?.title,"Submit outstanding VAT return — 26A2");
+  assert.equal(submit?.priority,"critical");assert.equal(submit?.is_machine_verifiable,true);
+  assert.equal(review?.title,"Decide whether to request HMRC review — 26A2 penalty point");
+  assert.equal(review?.due_date,"2026-10-18");assert.equal(review?.is_machine_verifiable,false);
+  assert.equal(deriveComplianceEventActions({...base,filed:true}).some(action=>action.action_type==="submit_outstanding_vat_return"),false);
+  assert.equal(deriveComplianceEventActions({...base,filed:true}).some(action=>action.action_type==="decide_hmrc_review"),true);
+});
+
+test("compliance migration is additive, structured, and never seeds or mutates VAT filings",()=>{
+  const sql=readFileSync(path.resolve("server/sql/20260929_vat_penalty_compliance_events.sql"),"utf8");
+  for(const field of ["event_type","vat_period_id","canonical_period_reference","source_period_reference","notice_date","event_date","penalty_points","total_penalty_points","financial_penalty","review_deadline","review_deadline_source_date","review_deadline_rule","dedupe_key"])assert.match(sql,new RegExp(field));
+  assert.match(sql,/penalty_points >= 0/);assert.match(sql,/financial_penalty >= 0/);assert.match(sql,/vat_late_submission_penalty/);assert.match(sql,/compliance_event/);
+  assert.doesNotMatch(sql,/INSERT INTO finance_os\.(compliance_events|vat_filings|finance_actions|evidence|evidence_links)/i);
+  assert.doesNotMatch(sql,/ALTER TABLE finance_os\.vat_filings|UPDATE finance_os\.vat_filings|DELETE FROM finance_os\.vat_filings/i);
+});
+
+test("compliance event responses omit sensitive VAT identifiers and generic metadata",()=>{
+  const service=readFileSync(path.resolve("server/src/services/finance-compliance.service.ts"),"utf8");
+  const migration=readFileSync(path.resolve("server/sql/20260929_vat_penalty_compliance_events.sql"),"utf8");
+  assert.doesNotMatch(migration,/vat_registration|registration_number|metadata jsonb/i);
+  assert.doesNotMatch(service,/compliance_events[^`]*vat_registration/i);
+  assert.match(service,/Unsupported compliance event fields/);
 });

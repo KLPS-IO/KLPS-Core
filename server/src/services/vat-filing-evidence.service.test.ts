@@ -46,3 +46,10 @@ test("immutable VAT filing triggers remain untouched",()=>{
   assert.match(original,/vat_filings_immutable_update/);assert.match(original,/vat_filings_immutable_delete/);
   assert.doesNotMatch(migration,/DROP TRIGGER|ALTER TABLE finance_os\.vat_filings|UPDATE finance_os\.vat_filings|DELETE FROM finance_os\.vat_filings/);
 });
+
+test("compliance events are canonical evidence targets for separately uploaded notice pages",()=>{
+  assert.ok(LINKED_ENTITY_TYPES.includes("compliance_event"));
+  assert.match(evidence,/compliance_event:"finance_os\.compliance_events"/);
+  assert.match(evidence,/COALESCE\(\(SELECT MAX\(display_order\) \+ 100/);
+  assert.match(routes,/compliance_event_evidence_linked|auditComplianceEventEvidence/);
+});

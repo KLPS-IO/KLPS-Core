@@ -22,6 +22,11 @@ export const readinessState=(input:{filed:boolean;deadline:string;today:string;b
   return"UPCOMING";
 };
 const minusDays=(date:string,count:number)=>new Date(Date.parse(`${date}T00:00:00Z`)-count*86400000).toISOString().slice(0,10);
+const plusDays=(date:string,count:number)=>new Date(Date.parse(`${date}T00:00:00Z`)+count*86400000).toISOString().slice(0,10);
+const complianceError=(message:string,code="invalid_compliance_event",statusCode=400)=>Object.assign(new Error(message),{code,statusCode});
+const requiredString=(input:Row,key:string)=>{const value=input[key];if(typeof value!=="string"||!value.trim())throw complianceError(`${key} is required`);return value.trim();};
+const requiredDate=(input:Row,key:string)=>{const value=requiredString(input,key);if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(`${value}T00:00:00Z`)))throw complianceError(`${key} must be an ISO date`);return value;};
+const nonNegative=(input:Row,key:string)=>{const value=Number(input[key]);if(!Number.isFinite(value)||value<0)throw complianceError(`${key} must be non-negative`);return value;};
 
 export const derivePeriodActions=(period:Row):FinanceActionCandidate[]=>{
   if(period.readiness_state==="SUBMITTED")return[];
@@ -49,6 +54,16 @@ export const deriveExpenseActions=(rows:Row[]):FinanceActionCandidate[]=>rows.fl
   return result;
 });
 
+export const deriveComplianceEventActions=(event:Row):FinanceActionCandidate[]=>{
+  if(event.event_type!=="vat_late_submission_penalty")return[];
+  const id=String(event.id),periodId=String(event.vat_period_id),reference=String(event.canonical_period_reference);
+  const link=`/data-room/finance/vat-ledger?period=${periodId}`;
+  const actions:FinanceActionCandidate[]=[];
+  if(!event.filed)actions.push({action_type:"submit_outstanding_vat_return",entity_type:"vat_period",entity_id:periodId,title:`Submit outstanding VAT return — ${reference}`,description:`VAT period ${event.start_date} to ${event.end_date}; original deadline ${event.filing_deadline}`,priority:"critical",due_date:String(event.filing_deadline),recommended_start_date:String(event.filing_deadline),is_machine_verifiable:true,dedupe_key:`vat-period:${periodId}:submit_outstanding_vat_return`,deep_link:link,metadata:{vat_period_id:periodId,canonical_period_reference:reference,compliance_event_id:id}});
+  actions.push({action_type:"decide_hmrc_review",entity_type:"compliance_event",entity_id:id,title:`Decide whether to request HMRC review — ${reference} penalty point`,description:`Founder decision for the HMRC notice dated ${event.notice_date}; no review is submitted automatically.`,priority:"high",due_date:day(event.review_deadline),recommended_start_date:day(event.notice_date),is_machine_verifiable:false,dedupe_key:`compliance-event:${id}:decide_hmrc_review`,deep_link:"/data-room/finance/actions",metadata:{vat_period_id:periodId,canonical_period_reference:reference,compliance_event_id:id,review_deadline_source_date:event.review_deadline_source_date,review_deadline_rule:event.review_deadline_rule}});
+  return actions;
+};
+
 export const getFinanceCompliance=async(now=new Date(),db:Db=pool)=>{
   const today=now.toISOString().slice(0,10);
   const periods=(await db.query(`SELECT p.*,p.start_date::text,p.end_date::text,p.filing_deadline::text,
@@ -61,13 +76,14 @@ export const getFinanceCompliance=async(now=new Date(),db:Db=pool)=>{
   const enriched=periods.map(period=>{const filingDeadline=day(period.filing_deadline)!;const state=readinessState({filed:Boolean(period.filed),deadline:filingDeadline,today,blockers:Number(period.blocker_count),validated:Boolean(period.validated),exported:Boolean(period.exported),started:Boolean(period.started)});return{...period,readiness_state:state,reminder:reminderState(filingDeadline,today)};});
   const primary=enriched.find(period=>period.readiness_state!=="SUBMITTED")??null;
   const actions=(await db.query(`SELECT * FROM finance_os.finance_actions WHERE status IN ('open','in_progress','waiting') ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,due_date NULLS LAST,created_at LIMIT 100`)).rows;
-  return{as_of:today,primary_period:primary,periods:enriched,actions};
+  const complianceEvents=(await db.query(`SELECT e.id,e.event_type,e.vat_period_id,e.canonical_period_reference,e.source_period_reference,e.notice_date::text,e.event_date::text,e.reason,e.penalty_points,e.total_penalty_points,e.financial_penalty,e.currency,e.review_deadline::text,e.review_deadline_source_date::text,e.review_deadline_rule,e.status,p.start_date::text,p.end_date::text,p.filing_deadline::text,EXISTS(SELECT 1 FROM finance_os.vat_filings f WHERE f.vat_period_id=e.vat_period_id) filed,(SELECT count(*)::int FROM finance_os.evidence_links l WHERE l.entity_type='compliance_event' AND l.entity_id=e.id AND l.hidden=false) evidence_count FROM finance_os.compliance_events e JOIN finance_os.vat_periods p ON p.id=e.vat_period_id ORDER BY e.notice_date DESC,e.created_at DESC`)).rows;
+  return{as_of:today,primary_period:primary,periods:enriched,actions,compliance_events:complianceEvents};
 };
 
 export const refreshFinanceActions=async(userId:string,now=new Date(),db:Db=pool)=>{
   const overview=await getFinanceCompliance(now,db);
   const ledger=await getVatLedger(undefined,db);
-  const candidates=[...overview.periods.flatMap(derivePeriodActions),...deriveExpenseActions(ledger)];
+  const candidates=[...overview.periods.flatMap(derivePeriodActions),...deriveExpenseActions(ledger),...overview.compliance_events.flatMap(deriveComplianceEventActions)];
   const client=db===pool?await pool.connect():null;
   const runner:Db=client??db;
   const summary={created:0,updated:0,completed:0,unchanged:0};
@@ -81,6 +97,32 @@ export const refreshFinanceActions=async(userId:string,now=new Date(),db:Db=pool
     await runner.query(`INSERT INTO finance_os.finance_events(event_type,entity_type,summary,metadata,created_by) VALUES('finance_actions_refreshed','finance_actions','Finance actions refreshed',$1,$2)`,[summary,userId]);
     if(db===pool)await runner.query("COMMIT");return summary;
   }catch(error){if(client)await runner.query("ROLLBACK");throw error;}finally{client?.release();}
+};
+
+export const createComplianceEvent=async(input:Row,userId:string,db:Db=pool)=>{
+  const allowed=new Set(["event_type","vat_period_id","canonical_period_reference","source_period_reference","notice_date","event_date","reason","penalty_points","total_penalty_points","financial_penalty","currency","review_deadline","review_deadline_source_date","review_deadline_rule","status","dedupe_key","change_reason"]);
+  const forbidden=Object.keys(input).filter(key=>!allowed.has(key));
+  if(forbidden.length)throw complianceError(`Unsupported compliance event fields: ${forbidden.join(", ")}`);
+  if(requiredString(input,"event_type")!=="vat_late_submission_penalty")throw complianceError("Unsupported compliance event type");
+  const noticeDate=requiredDate(input,"notice_date"),reviewSource=requiredDate(input,"review_deadline_source_date"),reviewDeadline=requiredDate(input,"review_deadline");
+  const reviewRule=requiredString(input,"review_deadline_rule");
+  if(reviewSource!==noticeDate||reviewRule!=="notice_date_plus_30_calendar_days"||reviewDeadline!==plusDays(noticeDate,30))throw complianceError("Review deadline provenance must be notice date plus 30 calendar days","invalid_review_deadline");
+  const points=nonNegative(input,"penalty_points"),totalPoints=nonNegative(input,"total_penalty_points"),financialPenalty=nonNegative(input,"financial_penalty");
+  if(!Number.isInteger(points)||!Number.isInteger(totalPoints)||totalPoints<points)throw complianceError("Penalty point values are invalid");
+  const status=input.status??"open";if(!["open","under_review","resolved","cancelled"].includes(String(status)))throw complianceError("Invalid compliance event status");
+  const values=[requiredString(input,"event_type"),requiredString(input,"vat_period_id"),requiredString(input,"canonical_period_reference"),requiredString(input,"source_period_reference"),noticeDate,requiredDate(input,"event_date"),requiredString(input,"reason"),points,totalPoints,financialPenalty,requiredString(input,"currency").toUpperCase(),reviewDeadline,reviewSource,reviewRule,status,requiredString(input,"dedupe_key"),requiredString(input,"change_reason"),userId];
+  const result=await db.query(`INSERT INTO finance_os.compliance_events(event_type,vat_period_id,canonical_period_reference,source_period_reference,notice_date,event_date,reason,penalty_points,total_penalty_points,financial_penalty,currency,review_deadline,review_deadline_source_date,review_deadline_rule,status,dedupe_key,change_reason,created_by,updated_by) VALUES(${values.map((_,i)=>`$${i+1}`).join(",")},$18) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id,event_type,vat_period_id,canonical_period_reference,source_period_reference,notice_date::text,event_date::text,reason,penalty_points,total_penalty_points,financial_penalty,currency,review_deadline::text,review_deadline_source_date::text,review_deadline_rule,status,dedupe_key,created_at`,values);
+  if(result.rows[0])await db.query(`INSERT INTO finance_os.finance_events(event_type,entity_type,entity_id,summary,metadata,created_by) VALUES('compliance_event_recorded','compliance_event',$1,'HMRC VAT late-submission penalty point recorded',jsonb_build_object('vat_period_id',$2::text,'canonical_period_reference',$3::text,'penalty_points',$4::int,'financial_penalty',$5::numeric),$6)`,[result.rows[0].id,result.rows[0].vat_period_id,result.rows[0].canonical_period_reference,result.rows[0].penalty_points,result.rows[0].financial_penalty,userId]);
+  const event=result.rows[0]??(await db.query(`SELECT id,event_type,vat_period_id,canonical_period_reference,source_period_reference,notice_date::text,event_date::text,reason,penalty_points,total_penalty_points,financial_penalty,currency,review_deadline::text,review_deadline_source_date::text,review_deadline_rule,status,dedupe_key,created_at FROM finance_os.compliance_events WHERE dedupe_key=$1`,[input.dedupe_key])).rows[0];
+  return{...event,created:Boolean(result.rows[0])};
+};
+
+export const listComplianceEvents=async(db:Db=pool)=>(await db.query(`SELECT e.id,e.event_type,e.vat_period_id,e.canonical_period_reference,e.source_period_reference,e.notice_date::text,e.event_date::text,e.reason,e.penalty_points,e.total_penalty_points,e.financial_penalty,e.currency,e.review_deadline::text,e.review_deadline_source_date::text,e.review_deadline_rule,e.status,(SELECT count(*)::int FROM finance_os.evidence_links l WHERE l.entity_type='compliance_event' AND l.entity_id=e.id AND l.hidden=false) evidence_count FROM finance_os.compliance_events e ORDER BY e.notice_date DESC,e.created_at DESC`)).rows;
+
+export const auditComplianceEventEvidence=async(complianceEventId:string,evidenceId:string,relationship:string,userId:string,db:Db=pool)=>{
+  const event=(await db.query(`SELECT id,vat_period_id,canonical_period_reference FROM finance_os.compliance_events WHERE id=$1`,[complianceEventId])).rows[0];
+  if(!event)throw complianceError("Compliance event not found","linked_entity_not_found",404);
+  await db.query(`INSERT INTO finance_os.finance_events(event_type,entity_type,entity_id,summary,metadata,created_by) VALUES('compliance_event_evidence_linked','compliance_event',$1,'HMRC penalty notice evidence linked',jsonb_build_object('vat_period_id',$2::text,'canonical_period_reference',$3::text,'evidence_id',$4::uuid::text,'relationship',$5::text),$6)`,[event.id,event.vat_period_id,event.canonical_period_reference,evidenceId,relationship,userId]);
 };
 
 export const listFinanceActions=async(db:Db=pool)=>(await db.query("SELECT * FROM finance_os.finance_actions ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,due_date NULLS LAST,created_at")).rows;
