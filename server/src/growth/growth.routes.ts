@@ -1,3 +1,4 @@
+import {refreshNarratives,listNarratives,decideNarrative,planNarrativeContent,narrativeHistory} from './narrative.service';
 import { acquisitionReport } from './acquisition.service';
 import express from "express";
 import {
@@ -205,6 +206,12 @@ router.get('/acquisition', asyncHandler(async (req,res) => {
   res.setHeader('Cache-Control','private, no-store');
   res.json({status:'success',acquisition:await acquisitionReport(workspace.id)});
 }));
+
+router.get('/narrative-opportunities', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json({opportunities:await listNarratives(w.id)});}));
+router.post('/narrative-opportunities/refresh', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await refreshNarratives(w.id,req.dataRoomUser!.id));}));
+router.get('/narrative-opportunities/:id/history', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json({history:await narrativeHistory(w.id,param(req.params.id))});}));
+router.post('/narrative-opportunities/:id/decision', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json({opportunity:await decideNarrative(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{})});}));
+router.post('/narrative-opportunities/:id/content-plan', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await planNarrativeContent(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
 
 router.get("/tracked-links", asyncHandler(async (req, res) => {
   const workspace = await workspaceFor(req);

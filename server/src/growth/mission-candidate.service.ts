@@ -1,3 +1,4 @@
+import {listNarratives} from './narrative.service';
 export type CandidateUrgency = "low" | "medium" | "high" | "urgent";
 export type CandidateSource =
   | "social"
@@ -53,6 +54,7 @@ export type CandidateSnapshot = {
   unresolved_referrals: Array<{ id: string; person_name?: string | null }>;
   goals: Array<{ id: string; label: string; target_date: string | null; current_value: number | null; target_value: number }>;
   insights: Array<{ id: string; title: string; recommended_decision: string | null; status: string }>;
+  narrative_opportunities?: Array<{id:string;status:string;current:boolean;content_item_id:string|null;deferred_until:string|null;proposal:{title:string;significance:string};evidence:{disclosure:string}}>;
   last_metric_date: string | null;
 };
 
@@ -321,6 +323,18 @@ export const deriveMissionCandidates = (
     deadline_at: goal.target_date, relationship_impact: 0, campaign_relevance: 0,
     sprint_alignment: snapshot.active_sprint ? 15 : 0
   }));
+  for (const opportunity of snapshot.narrative_opportunities ?? []) {
+    if (!opportunity.current || ['dismissed','confidential','superseded'].includes(opportunity.status) || (opportunity.status==='deferred' && opportunity.deferred_until && new Date(opportunity.deferred_until).getTime()>now.getTime())) continue;
+    const planning=opportunity.status==='accepted';
+    if(planning&&opportunity.content_item_id)continue;
+    candidates.push(candidate({candidate_type:planning?'plan_narrative_content':'review_narrative_opportunity',deduplication_key:`intelligence:narrative:${planning?'plan':'review'}:${opportunity.id}`,
+      title:planning?'Plan content from an accepted opportunity':'Review a company-development opportunity',
+      description:opportunity.proposal.title+'. Open Intelligence to inspect provenance and '+(planning?'create a content idea.':'decide disclosure and significance.'),
+      why_it_matters:opportunity.proposal.significance,
+      expected_outcome:planning?'One linked content idea in Studio, awaiting separate content and publishing approval.':'A recorded founder decision on the proposed narrative; no social post is created.',
+      estimated_minutes:15,urgency:'medium',importance:planning?34:30,source_module:'intelligence',related_entity_type:'narrative_opportunity',related_entity_id:opportunity.id,
+      completion_condition:{evaluator:planning?'narrative_content_planned':'narrative_reviewed',id:opportunity.id},deadline_at:null,relationship_impact:0,campaign_relevance:3,sprint_alignment:3}));
+  }
   for (const insight of snapshot.insights.filter(item => item.status === "active").slice(0,3)) candidates.push(candidate({
     candidate_type: "review_insight",
     deduplication_key: `intelligence:review:${insight.id}`,
@@ -387,7 +401,7 @@ export const getMissionCandidates = async (
     : Promise.resolve({ rows: [] });
   const [
     social, content, campaign, sprint, followUps, unreviewed, qualifications,
-    referrals, goals, insights, metrics, history
+    referrals, goals, insights, metrics, history, narratives
   ] = await Promise.all([
     db.query(`SELECT provider,status,discovered_capabilities FROM growth_os.social_connections WHERE workspace_id=$1`, [workspaceId]),
     db.query(`SELECT id,title,status,scheduled_at,published_at,updated_at,campaign_id,sprint_id FROM growth_os.content_items WHERE workspace_id=$1 AND status<>'archived'`, [workspaceId]),
@@ -425,9 +439,10 @@ export const getMissionCandidates = async (
       WHERE r.workspace_id=$1 AND r.status IN ('recorded','joined')
     `, [workspaceId]),
     db.query(`SELECT id,label,target_date,current_value,target_value FROM growth_os.goals WHERE workspace_id=$1 AND status='active'`, [workspaceId]),
-    db.query(`SELECT id,title,recommended_decision,status FROM growth_os.insights WHERE workspace_id=$1 AND status='active' ORDER BY created_at LIMIT 20`, [workspaceId]),
+    db.query(`SELECT id,title,recommended_decision,status FROM growth_os.insights WHERE workspace_id=$1 AND status='active' AND NOT EXISTS(SELECT 1 FROM growth_os.narrative_opportunities n WHERE n.insight_id=growth_os.insights.id AND n.workspace_id=$1) ORDER BY created_at LIMIT 20`, [workspaceId]),
     db.query(`SELECT max(snapshot_date)::text AS last_metric_date FROM growth_os.metric_snapshots WHERE workspace_id=$1`, [workspaceId]),
-    historyQuery
+    historyQuery,
+    listNarratives(workspaceId,db)
   ]);
   const configured = listSocialAdapters()
     .filter(adapter => validateSocialEnvironment(adapter.definition.id).available)
@@ -444,6 +459,7 @@ export const getMissionCandidates = async (
     unresolved_referrals: referrals.rows,
     goals: goals.rows,
     insights: insights.rows,
+    narrative_opportunities: narratives,
     last_metric_date: metrics.rows[0]?.last_metric_date ?? null
   }, history.rows, now);
 };
@@ -540,6 +556,10 @@ export const evaluateMissionCompletion = async (
   let query = "";
   let params: unknown[] = [workspaceId];
   switch (condition.evaluator) {
+    case 'narrative_reviewed':
+      query=`SELECT EXISTS(SELECT 1 FROM growth_os.narrative_opportunities WHERE workspace_id=$1 AND id=$2 AND status IN ('accepted','dismissed','deferred','confidential')) AS satisfied`;params=[workspaceId,id];break;
+    case 'narrative_content_planned':
+      query=`SELECT EXISTS(SELECT 1 FROM growth_os.narrative_opportunities WHERE workspace_id=$1 AND id=$2 AND status='accepted' AND content_item_id IS NOT NULL) AS satisfied`;params=[workspaceId,id];break;
     case "social_connection_status":
       query = `SELECT EXISTS(SELECT 1 FROM growth_os.social_connections WHERE workspace_id=$1 AND provider=$2 AND status=$3) AS satisfied`;
       params = [workspaceId, condition.provider, condition.status];
