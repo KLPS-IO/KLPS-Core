@@ -14,9 +14,9 @@ test('overview never promotes an existing read-only connection from configured r
  const rows=[{id:'c',provider:'x',status:'connected',granted_scopes:['tweet.read','users.read','offline.access'],discovered_capabilities:['text','direct_publishing']}];
  const db={query:async(sql:string)=>({rows:sql.includes('FROM growth_os.social_connections')?rows:[]})};
  let x=(await getSocialProviderOverview('w',db as never)).find(p=>p.provider==='x')!;
- assert.equal(x.publishing_enabled,false);assert.equal(x.reauthorization_required,true);assert.deepEqual(x.capabilities,[]);assert(x.required_permissions.includes('tweet.write'));
+ assert.equal(x.publishing_enabled,false);assert.equal(x.reauthorization_required,false);assert.equal(x.execution_policy,'manual');assert.equal(x.manual_publishing_enabled,true);assert.deepEqual(x.capabilities,[]);assert(x.required_permissions.includes('tweet.write'));
  rows[0].granted_scopes.push('tweet.write');
- x=(await getSocialProviderOverview('w',db as never)).find(p=>p.provider==='x')!;assert.equal(x.publishing_enabled,true);
+ x=(await getSocialProviderOverview('w',db as never)).find(p=>p.provider==='x')!;assert.equal(x.publishing_enabled,false);
  rows[0].status='expired';x=(await getSocialProviderOverview('w',db as never)).find(p=>p.provider==='x')!;assert.equal(x.publishing_enabled,false);assert.deepEqual(x.capabilities,[]);assert.deepEqual(x.connection?.discovered_capabilities,[]);
 });
 test('text validation uses X weighted Unicode and URL rules; attachments stay gated',()=>{

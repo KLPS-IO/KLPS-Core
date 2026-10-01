@@ -1,3 +1,4 @@
+import { recordAttributedVisit, registerWaitlist } from '../growth/acquisition.service';
 import { Router } from "express";
 import {
   requireAdmin,
@@ -10,43 +11,25 @@ const router = Router();
 const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-let schemaReady: Promise<void> | null = null;
-
-const ensureWaitlistSchema = () => {
-  if (!schemaReady) {
-    schemaReady = pool
-      .query(`
-        CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-        CREATE TABLE IF NOT EXISTS public.waitlist_signups (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          name TEXT NOT NULL,
-          email TEXT NOT NULL,
-          phone TEXT,
-          source TEXT DEFAULT 'waitlist',
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE UNIQUE INDEX IF NOT EXISTS waitlist_signups_email_unique
-        ON public.waitlist_signups (LOWER(email));
-      `)
-      .then(() => undefined)
-      .catch(error => {
-        schemaReady = null;
-        throw error;
-      });
-  }
-
-  return schemaReady;
-};
-
 const normalizeOptionalText = (value: unknown) => {
   if (typeof value !== "string") return null;
 
   const trimmed = value.trim();
   return trimmed || null;
 };
+
+// Browser attribution is accepted only from the first-party site, after opt-in.
+router.post('/visits', async (req, res) => {
+  res.setHeader('Cache-Control','no-store');
+  const origin=req.get('origin');
+  const allowed=['https://klps.co.uk','https://www.klps.co.uk'];
+  if(['development','test'].includes(process.env.NODE_ENV ?? '')) allowed.push('http://127.0.0.1:5173','http://localhost:5173');
+  if(!origin || !allowed.includes(origin)) return res.status(403).json({ok:false,error:'first_party_origin_required'});
+  try {
+    const visit=await recordAttributedVisit(req.body ?? {});
+    return visit ? res.status(201).json({ok:true,...visit}) : res.status(400).json({ok:false,error:'attribution_unavailable'});
+  } catch { return res.status(503).json({ok:false,error:'attribution_unavailable'}); }
+});
 
 router.post("/", async (req, res) => {
   const name =
@@ -58,14 +41,14 @@ router.post("/", async (req, res) => {
   const source =
     normalizeOptionalText(req.body?.source) ?? "waitlist";
 
-  if (!name) {
+  if (!name || name.length > 200) {
     return res.status(400).json({
       ok: false,
       error: "name_required"
     });
   }
 
-  if (!email || !isValidEmail(email)) {
+  if (!email || email.length > 320 || (phone?.length ?? 0) > 80 || source.length > 120 || !isValidEmail(email)) {
     return res.status(400).json({
       ok: false,
       error: "valid_email_required"
@@ -73,45 +56,11 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    await ensureWaitlistSchema();
-
-    const result = await pool.query(
-      `
-      INSERT INTO public.waitlist_signups (
-        name,
-        email,
-        phone,
-        source
-      )
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (LOWER(email))
-      DO UPDATE SET
-        name = EXCLUDED.name,
-        phone = EXCLUDED.phone,
-        source = EXCLUDED.source,
-        updated_at = NOW()
-      RETURNING
-        id,
-        name,
-        email,
-        phone,
-        source,
-        created_at
-      `,
-      [
-        name,
-        email,
-        phone,
-        source
-      ]
-    );
-
-    return res.status(201).json({
-      ok: true,
-      signup: result.rows[0]
-    });
+    await registerWaitlist({name,email,phone,source,attribution_token:req.body?.attribution_token});
+    // Same response for new and repeat identities; no personal data or membership disclosure.
+    return res.status(201).json({ok:true});
   } catch (error) {
-    console.error("waitlist signup error:", error);
+    console.error("waitlist signup failed");
 
     return res.status(500).json({
       ok: false,
@@ -126,7 +75,7 @@ router.get(
   requireAdmin,
   async (_req, res) => {
     try {
-      await ensureWaitlistSchema();
+
 
       const result = await pool.query(`
         SELECT

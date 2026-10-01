@@ -1,3 +1,4 @@
+import { acquisitionReport } from './acquisition.service';
 import express from "express";
 import {
   DataRoomRequest,
@@ -197,6 +198,12 @@ router.post("/community/people/:id/referrals", asyncHandler(async (req, res) => 
 router.get("/community/voice", asyncHandler(async (req, res) => {
   const workspace = await workspaceFor(req);
   res.json({ status: "success", voice: await getCommunityVoice(workspace.id) });
+}));
+
+router.get('/acquisition', asyncHandler(async (req,res) => {
+  const workspace=await workspaceFor(req);
+  res.setHeader('Cache-Control','private, no-store');
+  res.json({status:'success',acquisition:await acquisitionReport(workspace.id)});
 }));
 
 router.get("/tracked-links", asyncHandler(async (req, res) => {

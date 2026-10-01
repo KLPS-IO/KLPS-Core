@@ -1,3 +1,4 @@
+import { isKlpsDestination } from './acquisition.service';
 import { PoolClient } from "pg";
 import { pool } from "../storage/postgres.client";
 
@@ -355,6 +356,17 @@ export const createTrackedLink = async (workspaceId: string, input: Input, db: D
   const medium = text(input.medium, 120);
   const campaign = text(input.campaign, 200);
   if (!labelValue || !destination || !source || !medium) throw error("Label, destination, source and medium are required");
+  if (!isKlpsDestination(destination)) throw error("Use an HTTPS KLPS homepage or waitlist URL");
+  const contentId = uuid(input.content_item_id);
+  let campaignId = uuid(input.campaign_id);
+  if (input.content_item_id && !contentId || input.campaign_id && !campaignId) throw error("Invalid content or campaign identifier");
+  if (contentId) {
+    const content = (await db.query(`SELECT campaign_id FROM growth_os.content_items WHERE id=$1 AND workspace_id=$2`,[contentId,workspaceId])).rows[0];
+    if (!content) throw error("Content must belong to this workspace");
+    if (campaignId && content.campaign_id && campaignId !== content.campaign_id) throw error("Campaign conflicts with content lineage");
+    campaignId = campaignId ?? content.campaign_id;
+  }
+  if (campaignId && !(await db.query(`SELECT id FROM growth_os.campaigns WHERE id=$1 AND workspace_id=$2`,[campaignId,workspaceId])).rows.length) throw error("Campaign must belong to this workspace");
   const codeResult = await db.query(`SELECT encode(gen_random_bytes(9),'hex') AS code`);
   const code = codeResult.rows[0].code;
   const generated = buildTrackedUrl(destination, source, medium, campaign, code);
@@ -363,7 +375,7 @@ export const createTrackedLink = async (workspaceId: string, input: Input, db: D
       workspace_id,public_code,label,destination_url,source,medium,campaign,
       content_item_id,campaign_id,referral_code,generated_url
     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *
-  `, [workspaceId,code,labelValue,destination,source,medium,campaign,uuid(input.content_item_id),uuid(input.campaign_id),text(input.referral_code,120),generated]);
+  `, [workspaceId,code,labelValue,destination,source,medium,campaign,contentId,campaignId,text(input.referral_code,120),generated]);
   return result.rows[0];
 };
 

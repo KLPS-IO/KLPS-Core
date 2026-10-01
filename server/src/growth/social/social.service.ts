@@ -77,7 +77,6 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
     const publishingCapabilities = definition.id === "x"
       ? (connection?.status === "connected" ? adapter.capabilitiesForScopes?.(connection.granted_scopes ?? []) ?? [] : [])
       : definition.capabilities;
-    const publishingEnabled = definition.id === "x" && connection?.status === "connected" && publishingCapabilities.includes("direct_publishing");
     const providerActivated = ["linkedin","facebook","tiktok","x","snapchat"].includes(definition.id) && environment.available;
     return {
       provider: definition.id,
@@ -88,9 +87,11 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
       future_permissions: definition.futurePermissions ?? [],
       capabilities: definition.id === "x" ? publishingCapabilities : definition.capabilities,
       ...(definition.id === "x" ? {
-        publishing_enabled: publishingEnabled,
+        publishing_enabled: false,
+        execution_policy: "manual",
+        manual_publishing_enabled: connection?.status === "connected",
         publishing_destination: connection?.publishing_destination ?? null,
-        reauthorization_required: Boolean(connection) && (!publishingEnabled || connection.status !== "connected"),
+        reauthorization_required: Boolean(connection) && connection.status !== "connected",
         connection: connection ? {...connection,discovered_capabilities:publishingCapabilities} : null
       } : {}),
       ...(definition.id === "snapchat" ? {publishing_destination:connection?.publishing_destination ?? null,handoff_enabled:connection?.status === "connected" && (adapter.capabilitiesForScopes?.(connection.granted_scopes ?? []) ?? []).includes("manual_handoff")} : {}),
@@ -107,9 +108,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         })()
       } : {}),
       setup_checklist: [
-        ...(definition.id === "x" ? [{label:"Publishing authorisation",detail:publishingEnabled
-          ? "Text publishing authorised. Every post requires founder approval and Publish now."
-          : "Identity connection does not enable publishing. Reconnect X and grant tweet.write; no keys need changing.",status:publishingEnabled ? "configured" : "required"}] : []),
+        ...(definition.id === "x" ? [{label:"Manual publishing policy",detail:"Approve copy in Growth OS, then copy/open X and post manually. Paid API execution and API scheduling are disabled; existing grants are preserved.",status:"configured"}] : []),
         {
           label: "Developer account",
           detail: definition.developerAccount,
@@ -779,6 +778,7 @@ export const schedulePublishJob = async (
   `, [jobId,workspaceId]);
   const job = result.rows[0];
   if (!job) throw socialError("Publish job not found", "social_publish_job_not_found", 404);
+  if (job.provider === "x") throw socialError("X is manual-only; API scheduling is disabled", "social_manual_publishing_required", 409);
   const currentContent = { copy: job.copy, media: job.media_references, destination: job.destination_reference };
   const currentFingerprint = fingerprintSocialContent(currentContent);
   const readiness = validatePublishReadiness({

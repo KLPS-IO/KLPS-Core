@@ -49,7 +49,7 @@ export function validate(row:Record<string,any>,expected:string) {
   mediaApproved:Boolean(row.media_approved_at)&&!approvalMustReset(row.variant_fingerprint,content(row)),
   destinationValid:Boolean(row.provider_account_id)&&row.destination_reference===row.provider_account_id,
   connected:row.connection_status==='connected',healthy:Boolean(row.last_successful_check_at),
-  requiredCapabilities:adapter.approvalCapabilities ?? ['text','direct_publishing'],availableCapabilities:adapter.capabilitiesForScopes(row.granted_scopes ?? [])
+  requiredCapabilities:row.provider==='x' ? [] : adapter.approvalCapabilities ?? ['text','direct_publishing'],availableCapabilities:adapter.capabilitiesForScopes(row.granted_scopes ?? [])
  });
  if(!readiness.ready)throw error('social_publish_not_ready',`Publishing is blocked: ${readiness.missing.join(', ')}. Reconnect if write access is missing.`);
  adapter.validatePublish({text:row.copy,media:row.media_references});return adapter;
@@ -99,6 +99,7 @@ export async function executePublishJob(workspace:string,user:string,job:string,
  const expected=input.expected_fingerprint;
  // Idempotent replay of a confirmed result needs no token refresh or new provider request.
  const existing=await getPublishJob(workspace,job,db);
+ if(existing.provider==='x')throw error('social_manual_publishing_required','X is manual-only. Copy approved text and complete the post on X; paid API execution is disabled.');
  if(getSocialAdapter(existing.provider).manualHandoff)throw error('social_manual_handoff_required','Complete this share manually in Snapchat; direct publishing is unavailable.');
  if(existing.status==='published')return existing;
  await freshToken(workspace,user,job,expected,db);
