@@ -1,3 +1,4 @@
+import {assertPlannedContent} from '../planner.service';
 import {readFromR2} from '../../services/r2.service';
 import {jpeg} from '../media-delivery.service';
 import {randomBytes} from 'crypto';
@@ -22,6 +23,7 @@ export async function prepareHandoff(workspace:string,user:string,job:string,inp
  if(input.confirmed!==true||typeof input.expected_fingerprint!=='string')throw unavailable();
  const c=await db.connect();try{
  await c.query('BEGIN');await founder(c,workspace,user);const row=await locked(c,workspace,job);
+ await assertPlannedContent(workspace,row.content_item_id,c);
  if(row.provider!=='snapchat')throw unavailable();validate(row,input.expected_fingerprint);
  if(row.status!=='approved'||row.execution_state!=='not_started'||!row.approved_by||!row.approved_at||row.approval_fingerprint!==input.expected_fingerprint||row.approved_account_id!==row.provider_account_id)throw unavailable();
  const existing=(await c.query('SELECT * FROM growth_os.social_handoffs WHERE workspace_id=$1 AND publish_job_id=$2 FOR UPDATE',[workspace,job])).rows[0];

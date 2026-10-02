@@ -147,6 +147,7 @@ test("mission control composes operational data in one response", async () => {
       active_goal_count: 1, last_metric_date: "2026-07-23", stuck_content: null, high_priority_question: null
     }] };
     if (sql.includes("FROM growth_os.sprints")) return { rows: [{ id: RECORD_ID, name: "Operation Stop Guessing" }] };
+    if (sql.includes("platform_brief IS NOT NULL") || sql.includes("narrative_plan IS NOT NULL") || sql.includes("FROM growth_os.media_assets")) return {rows:[]};
     if (sql.includes("FROM growth_os.campaigns")) return { rows: [{ id: RECORD_ID, name: "Campaign" }] };
     if (sql.includes("FROM growth_os.daily_missions")) return { rows: [{ id: RECORD_ID, title: "Mission" }] };
     if (sql.includes("FROM growth_os.goals")) return { rows: [{ id: RECORD_ID, label: "Reach", current_value: 5, target_value: 10 }] };

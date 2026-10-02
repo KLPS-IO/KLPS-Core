@@ -244,6 +244,15 @@ export const createGrowthRecord = async (resource: GrowthResource, workspaceId: 
 
 export const updateGrowthRecord = async (resource: GrowthResource, workspaceId: string, id: string, input: Input, db: Db = pool) => {
   const value = validateGrowthPayload(resource, input, true);
+  if(resource==='content' && ['scheduled_at','campaign_id','platform','title','pillar'].some(k=>k in value)){
+    const record=await getGrowthRecord(resource,workspaceId,id,db);
+    const comparable=(v:unknown)=>v instanceof Date?v.toISOString():v;
+    if(record.platform_brief&&['scheduled_at','campaign_id','platform','title','pillar'].some(k=>k in value&&comparable(value[k])!==comparable(record[k])))throw growthError('Edit narrative dates, order and briefs in the narrative planner','planner_owned_field',409);
+  }
+  if(resource==='campaigns'){
+    const record=await getGrowthRecord(resource,workspaceId,id,db);
+    if(record.narrative_plan)throw growthError('Edit this narrative campaign through the planner','planner_owned_field',409);
+  }
   if (resource === "missions" && value.status === "completed" && !("completed_at" in value)) value.completed_at = new Date().toISOString();
   if (resource === "missions" && value.status !== undefined && value.status !== "completed") value.completed_at = null;
   try {
@@ -255,6 +264,10 @@ export const updateGrowthRecord = async (resource: GrowthResource, workspaceId: 
 };
 
 export const deleteGrowthRecord = async (resource: GrowthResource, workspaceId: string, id: string, db: Db = pool) => {
+  if(resource==='content'||resource==='campaigns'){
+    const record=await getGrowthRecord(resource,workspaceId,id,db);
+    if(record.platform_brief||record.narrative_plan)throw growthError('Exclude narrative items in the planner; preserve their evidence lineage','planner_owned_record',409);
+  }
   if (resource === "metrics") throw growthError("Historical metrics must be corrected, not deleted", "growth_delete_forbidden", 409);
   const result = await db.query(`DELETE FROM growth_os.${GROWTH_RESOURCES[resource].table} WHERE id=$1 AND workspace_id=$2 RETURNING *`, [id, workspaceId]);
   if (!result.rows[0]) throw growthError("Growth OS record not found", "growth_record_not_found", 404);

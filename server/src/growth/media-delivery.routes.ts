@@ -1,3 +1,4 @@
+import {uploadPlanningMedia,previewPlanningMedia} from './planning-media.service';
 import express from 'express';
 import multer from 'multer';
 import { DataRoomRequest } from '../services/data-room.service';
@@ -23,3 +24,7 @@ privateMediaRoutes.post('/publishing-assets/:id/approve',run((r,w)=>{
 privateMediaRoutes.post('/publishing-assets/:id/deliveries',run((r,w)=>media.issueDelivery(w,String(r.params.id),r.body?.provider,pool,r.body?.publish_job_id??null)));
 privateMediaRoutes.get('/publishing-assets/:id/deliveries',run((r,w)=>media.deliveryStates(w,String(r.params.id))));
 privateMediaRoutes.delete('/media-deliveries/:id',run((r,w)=>media.revokeDelivery(w,String(r.params.id))));
+
+const sourceUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:40*1024*1024,files:1,fields:0}});
+privateMediaRoutes.post('/planning-media/upload',sourceUpload.single('file'),run((r,w)=>uploadPlanningMedia(w,r.file?.buffer??Buffer.alloc(0),r.file?.originalname??'')));
+privateMediaRoutes.get('/planning-media/:id/preview',async(req,res,next)=>{try{const r=req as DataRoomRequest;const w=await ensureWorkspace(r.dataRoomUser!.id,pool,r.dataRoomUser!.role);const file=await previewPlanningMedia(w.id,String(req.params.id));res.set({'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}).type(file.mime).send(file.body);}catch(e){next(e);}});

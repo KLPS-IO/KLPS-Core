@@ -1,3 +1,6 @@
+import {founder} from '../founder-access';
+export {founder} from '../founder-access';
+import {assertPlannedContent} from '../planner.service';
 import { Pool, PoolClient } from 'pg';
 import { pool } from '../../storage/postgres.client';
 import { getSocialAdapter } from './social.registry';
@@ -10,7 +13,7 @@ const error = (code: string, message: string, statusCode=409) => Object.assign(n
 const id = (value: string) => {if(!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value))throw error('social_invalid_id','Invalid publish job.',400);return value;};
 const selection = `SELECT j.*,c.provider,c.provider_account_id,c.provider_account_name,c.status AS connection_status,
  c.encrypted_access_token,c.encrypted_refresh_token,c.token_expires_at,c.granted_scopes,c.last_successful_check_at,
- v.copy,v.media_references,v.destination_reference,v.copy_approved_at,v.media_approved_at,v.approved_by AS variant_approved_by,
+ v.content_item_id,v.copy,v.media_references,v.destination_reference,v.copy_approved_at,v.media_approved_at,v.approved_by AS variant_approved_by,
  v.approval_fingerprint AS variant_fingerprint
  FROM growth_os.social_publish_jobs j
  JOIN growth_os.social_connections c ON c.id=j.connection_id AND c.workspace_id=j.workspace_id
@@ -30,11 +33,6 @@ const publicJob = (row: Record<string,any>) => ({
 async function transaction<T>(db:Database,work:(c:PoolClient)=>Promise<T>) {
  const c=await db.connect();try{await c.query('BEGIN');const result=await work(c);await c.query('COMMIT');return result;}
  catch(e){await c.query('ROLLBACK').catch(()=>undefined);throw e;}finally{c.release();}
-}
-export async function founder(c:PoolClient,workspace:string,user:string) {
- const r=await c.query(`SELECT w.id FROM growth_os.workspaces w JOIN data_room.users u ON u.id=w.owner_user_id
- WHERE w.id=$1 AND u.id=$2 AND u.role='founder_admin' AND coalesce(u.is_active,true) AND (u.expires_at IS NULL OR u.expires_at>now())`,[workspace,user]);
- if(!r.rows.length)throw error('social_founder_required','Only the workspace founder can approve or publish.',403);
 }
 export async function locked(c:PoolClient,workspace:string,job:string) {
  const r=await c.query(selection+' FOR UPDATE OF c,v,j',[workspace,id(job)]);
@@ -62,7 +60,7 @@ export async function listPublishJobs(workspace:string,db:Database=pool) {
 }
 export async function approvePublishJob(workspace:string,user:string,job:string,expected:string,db:Database=pool) {
  return transaction(db,async c=>{
-  await founder(c,workspace,user);const row=await locked(c,workspace,job);validate(row,expected);
+  await founder(c,workspace,user);const row=await locked(c,workspace,job);await assertPlannedContent(workspace,row.content_item_id,c);validate(row,expected);
   if(!['draft','approved'].includes(row.status)||row.execution_state!=='not_started')throw error('social_job_state_invalid','This job cannot be approved again.');
   const r=await c.query(`UPDATE growth_os.social_publish_jobs SET status='approved',approved_at=now(),approved_by=$3,
    approval_fingerprint=$4,approved_account_id=$5 WHERE workspace_id=$1 AND id=$2 RETURNING *`,[workspace,job,user,expected,row.provider_account_id]);
@@ -99,7 +97,7 @@ export async function executePublishJob(workspace:string,user:string,job:string,
  const expected=input.expected_fingerprint;
  // Idempotent replay of a confirmed result needs no token refresh or new provider request.
  const existing=await getPublishJob(workspace,job,db);
- if(existing.provider==='x')throw error('social_manual_publishing_required','X is manual-only. Copy approved text and complete the post on X; paid API execution is disabled.');
+ if(['x','tiktok'].includes(existing.provider))throw error('social_manual_publishing_required','This platform is manual-only. Complete the approved content on the platform; API execution is disabled.');
  if(getSocialAdapter(existing.provider).manualHandoff)throw error('social_manual_handoff_required','Complete this share manually in Snapchat; direct publishing is unavailable.');
  if(existing.status==='published')return existing;
  await freshToken(workspace,user,job,expected,db);
@@ -107,6 +105,7 @@ export async function executePublishJob(workspace:string,user:string,job:string,
  try {claim=await transaction(db,async c=>{
   await founder(c,workspace,user);const row=await locked(c,workspace,job);
   if(row.status==='published')return {already:publicJob(row)};
+  await assertPlannedContent(workspace,row.content_item_id,c);
   const adapter=validate(row,expected);
   if(row.execution_state==='in_flight'||row.execution_state==='unknown')throw error('social_publish_outcome_unknown','This job may already have reached X. It will not be resent; check the provider.');
   if(!['approved','retry','scheduled'].includes(row.status)||!row.approved_at||!row.approved_by||row.approval_fingerprint!==expected||row.approved_account_id!==row.provider_account_id)

@@ -1,3 +1,4 @@
+import {createNarrativePlan,listNarrativePlans,updateNarrativePlan,profilePlanningMedia,planningTimeline} from './planner.service';
 import {refreshNarratives,listNarratives,decideNarrative,planNarrativeContent,narrativeHistory} from './narrative.service';
 import { acquisitionReport } from './acquisition.service';
 import express from "express";
@@ -207,6 +208,11 @@ router.get('/acquisition', asyncHandler(async (req,res) => {
   res.json({status:'success',acquisition:await acquisitionReport(workspace.id)});
 }));
 
+router.get('/narrative-plans',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json(await listNarrativePlans(w.id));}));
+router.post('/narrative-plans',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await createNarrativePlan(w.id,req.dataRoomUser!.id,req.body??{}));}));
+router.patch('/narrative-plans/:id',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await updateNarrativePlan(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
+router.patch('/planning-media/:id',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await profilePlanningMedia(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
+router.get('/planning-timeline',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json(await planningTimeline(w.id));}));
 router.get('/narrative-opportunities', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json({opportunities:await listNarratives(w.id)});}));
 router.post('/narrative-opportunities/refresh', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await refreshNarratives(w.id,req.dataRoomUser!.id));}));
 router.get('/narrative-opportunities/:id/history', asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json({history:await narrativeHistory(w.id,param(req.params.id))});}));

@@ -94,6 +94,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         reauthorization_required: Boolean(connection) && connection.status !== "connected",
         connection: connection ? {...connection,discovered_capabilities:publishingCapabilities} : null
       } : {}),
+      ...(definition.id === "tiktok" ? {publishing_enabled:false,execution_policy:"manual",manual_publishing_enabled:connection?.status === "connected"} : {}),
       ...(definition.id === "snapchat" ? {publishing_destination:connection?.publishing_destination ?? null,handoff_enabled:connection?.status === "connected" && (adapter.capabilitiesForScopes?.(connection.granted_scopes ?? []) ?? []).includes("manual_handoff")} : {}),
       approval_required: !providerActivated,
       ...(definition.id === "facebook" ? {
@@ -108,6 +109,7 @@ export const getSocialProviderOverview = async (workspaceId: string, db: Db = po
         })()
       } : {}),
       setup_checklist: [
+        ...(definition.id === "tiktok" ? [{label:"Manual publishing policy",detail:"Prepare video-first briefs and approved genuine footage in Studio. The founder completes publishing manually in TikTok; API execution and scheduling are disabled.",status:"configured"}] : []),
         ...(definition.id === "x" ? [{label:"Manual publishing policy",detail:"Approve copy in Growth OS, then copy/open X and post manually. Paid API execution and API scheduling are disabled; existing grants are preserved.",status:"configured"}] : []),
         {
           label: "Developer account",
@@ -778,7 +780,7 @@ export const schedulePublishJob = async (
   `, [jobId,workspaceId]);
   const job = result.rows[0];
   if (!job) throw socialError("Publish job not found", "social_publish_job_not_found", 404);
-  if (job.provider === "x") throw socialError("X is manual-only; API scheduling is disabled", "social_manual_publishing_required", 409);
+  if (["x","tiktok"].includes(job.provider)) throw socialError("This platform is manual-only; API scheduling is disabled", "social_manual_publishing_required", 409);
   const currentContent = { copy: job.copy, media: job.media_references, destination: job.destination_reference };
   const currentFingerprint = fingerprintSocialContent(currentContent);
   const readiness = validatePublishReadiness({

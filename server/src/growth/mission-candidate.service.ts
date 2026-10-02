@@ -1,3 +1,4 @@
+import {listNarrativePlans} from './planner.service';
 import {listNarratives} from './narrative.service';
 export type CandidateUrgency = "low" | "medium" | "high" | "urgent";
 export type CandidateSource =
@@ -55,6 +56,7 @@ export type CandidateSnapshot = {
   goals: Array<{ id: string; label: string; target_date: string | null; current_value: number | null; target_value: number }>;
   insights: Array<{ id: string; title: string; recommended_decision: string | null; status: string }>;
   narrative_opportunities?: Array<{id:string;status:string;current:boolean;content_item_id:string|null;deferred_until:string|null;proposal:{title:string;significance:string};evidence:{disclosure:string}}>;
+  narrative_plans?: Array<Record<string,any>>;
   last_metric_date: string | null;
 };
 
@@ -135,6 +137,7 @@ export const deriveMissionCandidates = (
   now = new Date()
 ) => {
   const candidates: MissionCandidate[] = [];
+  const plannedIds=new Set((snapshot.narrative_plans??[]).flatMap(p=>p.items.map((i:any)=>i.id)));
   const connection = (provider: string) => snapshot.social_connections.find(item => item.provider === provider);
   const linkedIn = connection("linkedin");
   if (!linkedIn || !["connected", "unhealthy", "expired"].includes(linkedIn.status)) {
@@ -236,7 +239,7 @@ export const deriveMissionCandidates = (
     deadline_at: null, relationship_impact: 24, campaign_relevance: 0, sprint_alignment: 0
   }));
 
-  const unscheduledPrepared = snapshot.content.filter(item => !item.scheduled_at && contentSchedulable(item.status));
+  const unscheduledPrepared = snapshot.content.filter(item => !plannedIds.has(item.id) && !item.scheduled_at && contentSchedulable(item.status));
   for (const item of unscheduledPrepared.slice(0,3)) candidates.push(candidate({
     candidate_type: "schedule_content",
     deduplication_key: `content:schedule:${item.id}`,
@@ -250,7 +253,7 @@ export const deriveMissionCandidates = (
     deadline_at: null, relationship_impact: 0, campaign_relevance: item.campaign_id ? 15 : 5,
     sprint_alignment: item.sprint_id ? 6 : 0
   }));
-  const scheduledReview = snapshot.content.filter(item => item.scheduled_at && new Date(item.scheduled_at).getTime() > now.getTime());
+  const scheduledReview = snapshot.content.filter(item => !plannedIds.has(item.id) && item.scheduled_at && new Date(item.scheduled_at).getTime() > now.getTime());
   for (const item of scheduledReview.filter(item => new Date(item.scheduled_at!).getTime() - now.getTime() <= dayMs).slice(0,2)) candidates.push(candidate({
     candidate_type: "review_scheduled_content",
     deduplication_key: `content:final-review:${item.id}`,
@@ -264,7 +267,7 @@ export const deriveMissionCandidates = (
     deadline_at: item.scheduled_at, relationship_impact: 0, campaign_relevance: 14,
     sprint_alignment: item.sprint_id ? 5 : 0
   }));
-  const unfinished = snapshot.content.filter(item => !["published","archived"].includes(item.status));
+  const unfinished = snapshot.content.filter(item => !plannedIds.has(item.id) && !["published","archived"].includes(item.status));
   for (const item of unfinished.filter(item => ageDays(item.updated_at, now) >= 7).slice(0,2)) candidates.push(candidate({
     candidate_type: "progress_stalled_content",
     deduplication_key: `content:progress:${item.id}`,
@@ -278,7 +281,7 @@ export const deriveMissionCandidates = (
     deadline_at: null, relationship_impact: 0, campaign_relevance: item.campaign_id ? 8 : 0,
     sprint_alignment: item.sprint_id ? 5 : 0
   }));
-  if (snapshot.active_campaign && !snapshot.content.some(item => item.campaign_id === snapshot.active_campaign!.id && contentPrepared(item.status))) {
+  if (snapshot.active_campaign && !(snapshot.narrative_plans??[]).some(p=>p.id===snapshot.active_campaign!.id) && !snapshot.content.some(item => item.campaign_id === snapshot.active_campaign!.id && contentPrepared(item.status))) {
     candidates.push(candidate({
       candidate_type: "prepare_campaign_content",
       deduplication_key: `campaign:prepare-content:${snapshot.active_campaign.id}`,
@@ -323,10 +326,19 @@ export const deriveMissionCandidates = (
     deadline_at: goal.target_date, relationship_impact: 0, campaign_relevance: 0,
     sprint_alignment: snapshot.active_sprint ? 15 : 0
   }));
+  for(const plan of snapshot.narrative_plans??[]){
+    if(!plan.current||!plan.items.some((i:any)=>i.platform_brief.included))continue;
+    const add=(key:string,title:string,description:string,id:string,evaluator:string,deadline:string|null)=>candidates.push(candidate({candidate_type:key,deduplication_key:`planner:${key}:${id}`,title,description,why_it_matters:'Advance the reviewed narrative toward qualified waitlist interest without publishing automatically.',expected_outcome:'A saved planning decision or fulfilled media requirement; separate publishing approval remains mandatory.',estimated_minutes:20,urgency:deadline&&Date.parse(deadline)<now.getTime()+2*dayMs?'high':'medium',importance:40,source_module:'content',related_entity_type:'narrative_plan',related_entity_id:plan.id,completion_condition:{evaluator,id},deadline_at:deadline,relationship_impact:0,campaign_relevance:10,sprint_alignment:3}));
+    if(!plan.planning_approved_at)add('approve_sequence','Review and approve the narrative sequence',plan.name,plan.id,'sequence_approved',null);
+    for(const item of plan.items){const b=item.platform_brief;if(!b.included||b.review==='rejected')continue;
+      if(b.review!=='accepted')add('review_brief','Review platform brief',`${item.platform}: ${item.title}`,item.id,'brief_reviewed',item.scheduled_at);
+      if(b.requirement.media_type!=='none'&&!item.asset_ready)add('provide_media',item.suggested_assets.length?'Review reusable media':b.requirement.kind==='genuine'?'Emma needed: record genuine media':'Prepare designed artwork',`${b.requirement.media_type}, ${b.requirement.aspect_ratio}, ${b.requirement.duration_seconds??'no'} seconds. ${b.requirement.topic}. Talking points: ${b.talking_points.join(' ')}. ${item.suggested_assets.length?'Matching approved assets are available; review suitability before reuse.':'No matching approved asset is recorded.'}`,item.id,'planning_asset_ready',b.requirement.deadline);
+    }
+  }
   for (const opportunity of snapshot.narrative_opportunities ?? []) {
     if (!opportunity.current || ['dismissed','confidential','superseded'].includes(opportunity.status) || (opportunity.status==='deferred' && opportunity.deferred_until && new Date(opportunity.deferred_until).getTime()>now.getTime())) continue;
     const planning=opportunity.status==='accepted';
-    if(planning&&opportunity.content_item_id)continue;
+    if(planning&&(opportunity.content_item_id||(snapshot.narrative_plans??[]).some(p=>p.narrative_opportunity_id===opportunity.id)))continue;
     candidates.push(candidate({candidate_type:planning?'plan_narrative_content':'review_narrative_opportunity',deduplication_key:`intelligence:narrative:${planning?'plan':'review'}:${opportunity.id}`,
       title:planning?'Plan content from an accepted opportunity':'Review a company-development opportunity',
       description:opportunity.proposal.title+'. Open Intelligence to inspect provenance and '+(planning?'create a content idea.':'decide disclosure and significance.'),
@@ -401,7 +413,7 @@ export const getMissionCandidates = async (
     : Promise.resolve({ rows: [] });
   const [
     social, content, campaign, sprint, followUps, unreviewed, qualifications,
-    referrals, goals, insights, metrics, history, narratives
+    referrals, goals, insights, metrics, history, narratives, plans
   ] = await Promise.all([
     db.query(`SELECT provider,status,discovered_capabilities FROM growth_os.social_connections WHERE workspace_id=$1`, [workspaceId]),
     db.query(`SELECT id,title,status,scheduled_at,published_at,updated_at,campaign_id,sprint_id FROM growth_os.content_items WHERE workspace_id=$1 AND status<>'archived'`, [workspaceId]),
@@ -442,7 +454,8 @@ export const getMissionCandidates = async (
     db.query(`SELECT id,title,recommended_decision,status FROM growth_os.insights WHERE workspace_id=$1 AND status='active' AND NOT EXISTS(SELECT 1 FROM growth_os.narrative_opportunities n WHERE n.insight_id=growth_os.insights.id AND n.workspace_id=$1) ORDER BY created_at LIMIT 20`, [workspaceId]),
     db.query(`SELECT max(snapshot_date)::text AS last_metric_date FROM growth_os.metric_snapshots WHERE workspace_id=$1`, [workspaceId]),
     historyQuery,
-    listNarratives(workspaceId,db)
+    listNarratives(workspaceId,db),
+    listNarrativePlans(workspaceId,db)
   ]);
   const configured = listSocialAdapters()
     .filter(adapter => validateSocialEnvironment(adapter.definition.id).available)
@@ -460,6 +473,7 @@ export const getMissionCandidates = async (
     goals: goals.rows,
     insights: insights.rows,
     narrative_opportunities: narratives,
+    narrative_plans:plans.plans,
     last_metric_date: metrics.rows[0]?.last_metric_date ?? null
   }, history.rows, now);
 };
@@ -555,6 +569,11 @@ export const evaluateMissionCompletion = async (
   const id = String(condition.id ?? mission.related_entity_id ?? "");
   let query = "";
   let params: unknown[] = [workspaceId];
+  if(['sequence_approved','brief_reviewed','planning_asset_ready'].includes(String(condition.evaluator))){
+    const {plans}=await listNarrativePlans(workspaceId,db);const plan=plans.find(p=>p.id===id||p.items.some((i:any)=>i.id===id));const item=plan?.items.find((i:any)=>i.id===id);
+    const satisfied=Boolean(plan?.current&&(condition.evaluator==='sequence_approved'?plan.planning_approved_at:condition.evaluator==='brief_reviewed'?item?.platform_brief.review!=='pending':item?.asset_ready));
+    return {satisfied,message:satisfied?'Saved planning outcome verified.':'Complete this action in the narrative planner first.'};
+  }
   switch (condition.evaluator) {
     case 'narrative_reviewed':
       query=`SELECT EXISTS(SELECT 1 FROM growth_os.narrative_opportunities WHERE workspace_id=$1 AND id=$2 AND status IN ('accepted','dismissed','deferred','confidential')) AS satisfied`;params=[workspaceId,id];break;
