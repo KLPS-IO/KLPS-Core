@@ -1,3 +1,4 @@
+import type {PoolClient} from 'pg';
 import {randomUUID} from 'crypto';
 import {digest,jpeg} from './media-delivery.service';
 import {pool} from '../storage/postgres.client';
@@ -10,9 +11,9 @@ export function sourceMediaType(b:Buffer){
  if(b.toString('ascii',4,8)==='ftyp'&&['isom','iso2','mp41','mp42','avc1','M4V '].includes(b.toString('ascii',8,12)))return {mime:'video/mp4',ext:'mp4',kind:'video'};
  throw fail();
 }
-export async function uploadPlanningMedia(w:string,bytes:Buffer,name:string){
+export async function uploadPlanningMedia(w:string,bytes:Buffer,name:string,db:Pick<PoolClient,'query'>=pool){
  const t=sourceMediaType(bytes),id=randomUUID(),key=`growth-source/${w}/${id}.${t.ext}`;
- await uploadToR2(key,bytes,t.mime);try{const row=(await pool.query('INSERT INTO growth_os.media_assets(id,workspace_id,filename,display_name,asset_type,mime_type,storage_key) VALUES($1,$2,$3,$3,$4,$5,$6) RETURNING id,display_name,mime_type,approved_for_use',[id,w,String(name||'Founder media').replace(/[\x00-\x1f/\\]/g,'').slice(0,150),t.kind,t.mime,key])).rows[0];return row;}catch(e){await deleteFromR2(key).catch(()=>undefined);throw e;}
+ await uploadToR2(key,bytes,t.mime);try{const row=(await db.query('INSERT INTO growth_os.media_assets(id,workspace_id,filename,display_name,asset_type,mime_type,storage_key) VALUES($1,$2,$3,$3,$4,$5,$6) RETURNING id,display_name,mime_type,approved_for_use',[id,w,String(name||'Founder media').replace(/[\x00-\x1f/\\]/g,'').slice(0,150),t.kind,t.mime,key])).rows[0];return row;}catch(e){await deleteFromR2(key).catch(()=>undefined);throw e;}
 }
 export async function previewPlanningMedia(w:string,id:string){
  const row=(await pool.query('SELECT storage_key,mime_type FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2',[w,id])).rows[0];

@@ -1,4 +1,5 @@
-import {createNarrativePlan,listNarrativePlans,updateNarrativePlan,profilePlanningMedia,planningTimeline} from './planner.service';
+import {listProduction,changeProduction} from './production.service';
+import {addNarrativePlatforms,createNarrativePlan,listNarrativePlans,updateNarrativePlan,profilePlanningMedia,planningTimeline} from './planner.service';
 import {refreshNarratives,listNarratives,decideNarrative,planNarrativeContent,narrativeHistory} from './narrative.service';
 import { acquisitionReport } from './acquisition.service';
 import express from "express";
@@ -208,8 +209,11 @@ router.get('/acquisition', asyncHandler(async (req,res) => {
   res.json({status:'success',acquisition:await acquisitionReport(workspace.id)});
 }));
 
+router.get('/production',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json(await listProduction(w.id));}));
+router.post('/production/:id',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await changeProduction(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
 router.get('/narrative-plans',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json(await listNarrativePlans(w.id));}));
 router.post('/narrative-plans',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await createNarrativePlan(w.id,req.dataRoomUser!.id,req.body??{}));}));
+router.post('/narrative-plans/:id/platforms',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await addNarrativePlatforms(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
 router.patch('/narrative-plans/:id',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await updateNarrativePlan(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
 router.patch('/planning-media/:id',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.json(await profilePlanningMedia(w.id,req.dataRoomUser!.id,param(req.params.id),req.body??{}));}));
 router.get('/planning-timeline',asyncHandler(async(req,res)=>{const w=await workspaceFor(req);res.setHeader('Cache-Control','private, no-store');res.json(await planningTimeline(w.id));}));

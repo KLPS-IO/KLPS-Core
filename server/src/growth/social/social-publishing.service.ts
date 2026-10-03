@@ -1,3 +1,4 @@
+import {assertProduction} from '../production-state';
 import {founder} from '../founder-access';
 export {founder} from '../founder-access';
 import {assertPlannedContent} from '../planner.service';
@@ -60,7 +61,7 @@ export async function listPublishJobs(workspace:string,db:Database=pool) {
 }
 export async function approvePublishJob(workspace:string,user:string,job:string,expected:string,db:Database=pool) {
  return transaction(db,async c=>{
-  await founder(c,workspace,user);const row=await locked(c,workspace,job);await assertPlannedContent(workspace,row.content_item_id,c);validate(row,expected);
+  await founder(c,workspace,user);const row=await locked(c,workspace,job);await assertPlannedContent(workspace,row.content_item_id,c);await assertProduction(workspace,row.content_item_id,c,row);validate(row,expected);
   if(!['draft','approved'].includes(row.status)||row.execution_state!=='not_started')throw error('social_job_state_invalid','This job cannot be approved again.');
   const r=await c.query(`UPDATE growth_os.social_publish_jobs SET status='approved',approved_at=now(),approved_by=$3,
    approval_fingerprint=$4,approved_account_id=$5 WHERE workspace_id=$1 AND id=$2 RETURNING *`,[workspace,job,user,expected,row.provider_account_id]);
@@ -105,7 +106,7 @@ export async function executePublishJob(workspace:string,user:string,job:string,
  try {claim=await transaction(db,async c=>{
   await founder(c,workspace,user);const row=await locked(c,workspace,job);
   if(row.status==='published')return {already:publicJob(row)};
-  await assertPlannedContent(workspace,row.content_item_id,c);
+  await assertPlannedContent(workspace,row.content_item_id,c);await assertProduction(workspace,row.content_item_id,c,row);
   const adapter=validate(row,expected);
   if(row.execution_state==='in_flight'||row.execution_state==='unknown')throw error('social_publish_outcome_unknown','This job may already have reached X. It will not be resent; check the provider.');
   if(!['approved','retry','scheduled'].includes(row.status)||!row.approved_at||!row.approved_by||row.approval_fingerprint!==expected||row.approved_account_id!==row.provider_account_id)

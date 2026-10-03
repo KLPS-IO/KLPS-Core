@@ -1,3 +1,4 @@
+import {assertProduction} from './production-state';
 import type {Pool,PoolClient} from 'pg';
 import {pool} from '../storage/postgres.client';
 import {listNarratives} from './narrative.service';
@@ -8,10 +9,10 @@ const fail=(message:string,statusCode=409)=>Object.assign(new Error(message),{co
 const uid=(x:unknown)=>{if(typeof x!=='string'||!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(x))throw fail('Invalid identifier',400);return x;};
 const text=(x:unknown,max=1000)=>{if(typeof x!=='string'||!x.trim()||x.length>max)throw fail('A valid planning description is required',400);return x.trim();};
 async function tx<T>(workspace:string,user:string,db:Database,fn:(c:PoolClient)=>Promise<T>){const c=await db.connect();try{await c.query('BEGIN');await founder(c,workspace,user);await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`narratives:${workspace}`]);const r=await fn(c);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
-async function source(workspace:string,id:string,c:Pick<PoolClient,'query'>){const n=(await listNarratives(workspace,c)).find(r=>r.id===id);if(!n||n.status!=='accepted'||!n.current||n.evidence.disclosure==='restricted')throw fail('The source must remain accepted, current and disclosure-safe');const insight=(await c.query('SELECT status FROM growth_os.insights WHERE workspace_id=$1 AND id=$2',[workspace,n.insight_id])).rows[0];if(!insight||insight.status==='archived')throw fail('The source Insight is archived');return n;}
+export async function assertNarrativeSource(workspace:string,id:string,c:Pick<PoolClient,'query'>){const n=(await listNarratives(workspace,c)).find(r=>r.id===id);if(!n||n.status!=='accepted'||!n.current||n.evidence.disclosure==='restricted')throw fail('The source must remain accepted, current and disclosure-safe');const insight=(await c.query('SELECT status FROM growth_os.insights WHERE workspace_id=$1 AND id=$2',[workspace,n.insight_id])).rows[0];if(!insight||insight.status==='archived')throw fail('The source Insight is archived');return n;}
 async function audit(c:PoolClient,w:string,u:string,n:string,details:unknown){await c.query("INSERT INTO growth_os.narrative_decisions(workspace_id,opportunity_id,actor_id,decision,details) VALUES($1,$2,$3,'planned',$4)",[w,n,u,JSON.stringify(details)]);}
 export async function createNarrativePlan(w:string,u:string,input:Record<string,any>,db:Database=pool){return tx(w,u,db,async c=>{
- const n=await source(w,uid(input.opportunity_id),c);
+ const n=await assertNarrativeSource(w,uid(input.opportunity_id),c);
  const existing=(await c.query('SELECT id FROM growth_os.campaigns WHERE workspace_id=$1 AND narrative_opportunity_id=$2',[w,n.id])).rows[0];if(existing)return existing;
  const platforms=input.platforms;if(!Array.isArray(platforms))throw fail('Select platforms',400);
  const start=text(input.start_date,10),end=text(input.end_date,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end))throw fail('Invalid dates',400);
@@ -30,7 +31,7 @@ export async function listNarrativePlans(w:string,db:Pick<PoolClient,'query'>=po
  return {plans:plans.rows.map(p=>({...p,current:p.source_insight_status!=='archived'&&ns.some(n=>n.id===p.narrative_opportunity_id&&n.status==='accepted'&&n.current),items:content.rows.filter(i=>i.campaign_id===p.id).map(i=>{const candidates=assets.rows.filter(a=>assetFits(i.platform_brief,a));return {...i,asset_ready:i.platform_brief.requirement.media_type==='none'||candidates.some(a=>a.id===i.platform_brief.asset_id),suggested_assets:candidates.map(safeAsset)};})})),media:assets.rows.map(safeAsset)};
 }
 export async function updateNarrativePlan(w:string,u:string,id:string,input:Record<string,any>,db:Database=pool){return tx(w,u,db,async c=>{
- const p=(await c.query('SELECT * FROM growth_os.campaigns WHERE workspace_id=$1 AND id=$2 AND narrative_plan IS NOT NULL FOR UPDATE',[w,uid(id)])).rows[0];if(!p)throw fail('Plan not found',404);if(input.version!==p.planning_version)throw fail('Plan changed; reload before editing');await source(w,p.narrative_opportunity_id,c);
+ const p=(await c.query('SELECT * FROM growth_os.campaigns WHERE workspace_id=$1 AND id=$2 AND narrative_plan IS NOT NULL FOR UPDATE',[w,uid(id)])).rows[0];if(!p)throw fail('Plan not found',404);if(input.version!==p.planning_version)throw fail('Plan changed; reload before editing');await assertNarrativeSource(w,p.narrative_opportunity_id,c);
  const rows=(await c.query('SELECT * FROM growth_os.content_items WHERE workspace_id=$1 AND campaign_id=$2 AND platform_brief IS NOT NULL FOR UPDATE',[w,id])).rows;
  if(!Array.isArray(input.items)||input.items.length!==rows.length||new Set(input.items.map((x:any)=>x.id)).size!==rows.length)throw fail('Submit each sequence item once',400);
  const media=(await c.query(`SELECT m.*,EXISTS(SELECT 1 FROM growth_os.publishing_assets p WHERE p.workspace_id=m.workspace_id AND p.media_asset_id=m.id AND p.state<>'revoked') stored_version FROM growth_os.media_assets m WHERE m.workspace_id=$1`,[w])).rows;
@@ -53,6 +54,8 @@ export async function updateNarrativePlan(w:string,u:string,id:string,input:Reco
  await audit(c,w,u,p.narrative_opportunity_id,{action:input.approve===true?'sequence_approved':'sequence_edited',campaign_id:id,version:p.planning_version+1,items:input.items.map((i:any)=>({id:i.id,title:i.title,role:i.role,included:i.included,review:i.review,scheduled_at:i.scheduled_at,asset_id:i.asset_id}))});return {id};
 });}
 export async function profilePlanningMedia(w:string,u:string,id:string,input:Record<string,any>,db:Database=pool){return tx(w,u,db,async c=>{
+ const stored=(await c.query('SELECT production_provenance FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2',[w,uid(id)])).rows[0];
+ if(stored?.production_provenance&&['genuine_founder','genuine_product'].includes(input.provenance_kind))throw fail('Designed or generated production assets cannot be relabelled as genuine media');
  if(input.provenance_confirmed!==true||!['genuine_founder','genuine_product','designed','generated','unknown'].includes(input.provenance_kind))throw fail('Confirm the actual media origin');
  if(!Array.isArray(input.suitable_platforms)||input.suitable_platforms.some((p:any)=>!PLATFORMS.includes(p)))throw fail('Invalid platform suitability');
  if(!['9:16','4:5','1:1','16:9',null].includes(input.aspect_ratio))throw fail('Invalid aspect ratio');
@@ -70,5 +73,20 @@ export async function assertPlannedContent(w:string,contentId:string,db:Pick<Poo
  const row=(await db.query('SELECT c.platform_brief,c.campaign_id FROM growth_os.content_items c WHERE c.workspace_id=$1 AND c.id=$2',[w,contentId])).rows[0];if(!row?.platform_brief)return;
  const {plans}=await listNarrativePlans(w,db);const plan=plans.find(p=>p.id===row.campaign_id);const item=plan?.items.find((i:any)=>i.id===contentId);
  if(!plan?.current||!plan.planning_approved_at||!item?.platform_brief.included||item.platform_brief.review!=='accepted'||!item.asset_ready)throw fail('Review the current narrative plan, brief and required assets before preparing a share');
- await source(w,plan.narrative_opportunity_id,db);
+ await assertNarrativeSource(w,plan.narrative_opportunity_id,db);
+ await assertProduction(w,contentId,db);
 }
+
+/** Extend the same campaign with pending briefs; never duplicate a platform's slots. */
+export async function addNarrativePlatforms(w:string,u:string,id:string,input:Record<string,any>,db:Database=pool){return tx(w,u,db,async c=>{
+ const p=(await c.query('SELECT * FROM growth_os.campaigns WHERE workspace_id=$1 AND id=$2 AND narrative_plan IS NOT NULL FOR UPDATE',[w,uid(id)])).rows[0];if(!p||input.version!==p.planning_version)throw fail('Plan changed; reload before editing');
+ const n=await assertNarrativeSource(w,p.narrative_opportunity_id,c);
+ const existing=(await c.query('SELECT DISTINCT platform FROM growth_os.content_items WHERE workspace_id=$1 AND campaign_id=$2 AND platform_brief IS NOT NULL',[w,id])).rows.map(r=>r.platform);
+ if(!Array.isArray(input.platforms)||!input.platforms.length||input.platforms.some((x:any)=>!PLATFORMS.includes(x)||existing.includes(x)))throw fail('Choose platforms not already in this plan');
+ const sequence=narrativeSequence(input.platforms,new Date(p.start_date).toISOString().slice(0,10),new Date(p.end_date).toISOString().slice(0,10),n.proposal.title);
+ for(const b of sequence)await c.query("INSERT INTO growth_os.content_items(workspace_id,campaign_id,title,content_type,platform,pillar,status,research_notes,scheduled_at,platform_brief) VALUES($1,$2,$3,$4,$5,$6,'idea',$7,$8,$9)",[w,id,b.title,b.requirement.media_type==='none'?'text':b.requirement.media_type,b.platform,b.role,n.proposal.evidence_summary,b.scheduled_at,JSON.stringify({...b,source_insight_id:n.insight_id,source_opportunity_id:n.id,constraints:n.proposal.evidence_summary})]);
+ const rows=(await c.query('SELECT id FROM growth_os.content_items WHERE workspace_id=$1 AND campaign_id=$2 AND platform_brief IS NOT NULL ORDER BY scheduled_at,platform,id',[w,id])).rows;
+ for(let index=0;index<rows.length;index++)await c.query("UPDATE growth_os.content_items SET platform_brief=jsonb_set(platform_brief,'{order}',to_jsonb($3::integer)) WHERE workspace_id=$1 AND id=$2",[w,rows[index].id,index+1]);
+ await c.query("UPDATE growth_os.campaigns SET planning_version=planning_version+1,planning_approved_at=NULL,planning_approved_by=NULL,narrative_plan=narrative_plan || $3::jsonb WHERE workspace_id=$1 AND id=$2",[w,id,JSON.stringify({approval:'draft',platforms:[...existing,...input.platforms]})]);
+ await audit(c,w,u,n.id,{action:'platform_briefs_added',campaign_id:id,platforms:input.platforms});return {id};
+});}
