@@ -1,10 +1,12 @@
+import sharp from 'sharp';
+import {chatGPTImageBrief} from './production-image-brief';
 import {randomUUID} from 'crypto';
 import type {Pool,PoolClient} from 'pg';
 import {pool} from '../storage/postgres.client';
 import {founder} from './founder-access';
 import {listNarrativePlans,assertNarrativeSource} from './planner.service';
 import {assetFits} from './planner-template';
-import {uploadPlanningMedia} from './planning-media.service';
+import {uploadPlanningMedia,previewPlanningMedia} from './planning-media.service';
 import {deleteFromR2} from '../services/r2.service';
 import {createTrackedLink} from './community.service';
 import {BRAND,briefFingerprint,prepareCopy,visualGenerator,productionError as fail,GenerationRequest} from './production-generation';
@@ -15,7 +17,8 @@ const text=(x:any,max:number)=>{if(typeof x!=='string'||x.length>max||!x.trim())
 export async function listProduction(w:string,db:Pick<PoolClient,'query'>=pool){const data=await listNarrativePlans(w,db);
  const assets=(await db.query('SELECT * FROM growth_os.media_assets WHERE workspace_id=$1',[w])).rows;
  for(const p of data.plans)for(const item of p.items){if(!item.production_state)continue;const hash=briefFingerprint(item,p);item.production_state={...item.production_state,candidates:item.production_state.candidates.map((x:any)=>{const a=assets.find(a=>a.id===x.media_asset_id);const current=p.current&&Boolean(p.planning_approved_at)&&item.platform_brief.included&&item.platform_brief.review==='accepted'&&x.brief_hash===hash&&!x.rejected_at&&(x.kind==='copy'||a?.approved_for_use&&x.asset_hash===assetFingerprint(a));return {...x,approval_current:Boolean(x.approved_at&&current),needs_regeneration:x.brief_hash!==hash};})};}
- return {...data,brand:BRAND,generation:{designed:'klps-designed-v1',external_enabled:false,notice:'Designed artwork uses the KLPS brand template without an external generation fee. External AI image generation needs founder cost approval.'}};}
+ for(const p of data.plans)for(const item of p.items){const s=item.production_state;if(s?.image_briefs)s.image_briefs=s.image_briefs.map((b:any)=>({...b,current:p.current&&Boolean(p.planning_approved_at)&&item.platform_brief.included&&item.platform_brief.review==='accepted'&&b.brief_hash===briefFingerprint(item,p)}));}
+ return {...data,brand:BRAND,generation:{designed:'klps-designed-v1',external_enabled:false,mode:'chatgpt_assisted',notice:'Prepare a ChatGPT-ready image brief, generate the image manually in ChatGPT, then upload it privately with provenance. Growth OS makes no paid image-generation API requests.'}};}
 export async function changeProduction(w:string,u:string,contentId:string,input:Record<string,any>,db:Database=pool){
  const c=await db.connect();let uploaded:string|undefined;try{
  await c.query('BEGIN');await founder(c,w,u);await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`narratives:${w}`]);
@@ -28,6 +31,7 @@ export async function changeProduction(w:string,u:string,contentId:string,input:
  if(input.version!==s.version)throw fail('Production changed; reload before editing');
  if(s.candidates.length>=80&&['copy','visual','edit','attach'].includes(input.action))throw fail('This brief has reached its 80-candidate limit. Review existing candidates.');
  const hash=briefFingerprint(row,p),now=new Date().toISOString();
+ if(input.action==='image_brief'&&(s.image_briefs?.length??0)>=40)throw fail('This position has reached its 40-image-brief limit. Review its existing briefs.');
  let candidate:any=null;
  const base=(kind:string,origin:string)=>({id:randomUUID(),kind,origin,brief_hash:hash,created_at:now,created_by:u,approved_at:null,approved_by:null,rejected_at:null});
  let tracked=(await c.query('SELECT id,generated_url FROM growth_os.tracked_links WHERE workspace_id=$1 AND content_item_id=$2 AND campaign_id=$3 AND source=$4 ORDER BY created_at LIMIT 1',[w,row.id,p.id,row.platform])).rows[0];
@@ -36,7 +40,13 @@ export async function changeProduction(w:string,u:string,contentId:string,input:
  if(!tracked)tracked=await createTrackedLink(w,{label:`${row.platform} · ${b.slot}`,destination_url:'https://klps.co.uk/waitlist',source:row.platform,medium:'social',campaign:p.name,content_item_id:row.id,campaign_id:p.id},c);
  }
  const request:GenerationRequest={content_id:row.id,brief:b,theme:p.narrative_plan.theme,evidence:n.evidence,constraints:n.proposal.evidence_summary,version:s.candidates.filter((x:any)=>x.kind===(input.action==='visual'?'asset':'copy')).length+1,tracked_link:tracked,neighbours:(await c.query('SELECT id,platform_brief->>\'role\' role,platform_brief->>\'slot\' slot FROM growth_os.content_items WHERE campaign_id=$1 AND workspace_id=$2 AND platform=$3 ORDER BY scheduled_at',[p.id,w,row.platform])).rows,approved_assets:(await c.query('SELECT id FROM growth_os.media_assets WHERE workspace_id=$1 AND approved_for_use=true',[w])).rows.map(x=>x.id)};
- if(input.action==='copy'){
+ if(input.action==='image_brief'){
+ request.version=(s.image_briefs?.length??0)+1;
+ request.neighbours=(await c.query("SELECT id,platform_brief->>'role' role,platform_brief->>'slot' slot,platform_brief->'requirement'->>'kind' kind,(platform_brief->>'included')::boolean included FROM growth_os.content_items WHERE workspace_id=$1 AND campaign_id=$2 AND platform=$3 ORDER BY scheduled_at",[w,p.id,row.platform])).rows;
+ const refs=(await c.query("SELECT DISTINCT m.id,m.display_name name,m.provenance_kind origin,i.platform_brief->>'slot' slot FROM growth_os.content_items i JOIN growth_os.media_assets m ON m.id::text=i.platform_brief->>'asset_id' AND m.workspace_id=i.workspace_id WHERE i.workspace_id=$1 AND i.campaign_id=$2 AND m.approved_for_use=true",[w,p.id])).rows;
+ const brief={id:randomUUID(),brief_hash:hash,version:request.version,request,prompt:chatGPTImageBrief(request,refs),created_at:now,created_by:u,provider:'chatgpt_manual',status:'awaiting_generated_asset'};
+ s.image_briefs=[...(s.image_briefs??[]),brief];s.image_brief_id=brief.id;s.generation_status='awaiting_generated_asset';s.asset_id=null;b.asset_id=null;
+ }else if(input.action==='copy'){
  candidate={...base('copy','generated_copy'),...prepareCopy(request),request,provider:'evidence-template-v1'};s.candidates.push(candidate);s.copy_id=candidate.id;
  }else if(input.action==='visual'){
  const provider=visualGenerator(input.provider??'klps-designed-v1');const result=await provider.generate(request,prepareCopy(request));
@@ -45,9 +55,23 @@ export async function changeProduction(w:string,u:string,contentId:string,input:
  await c.query("UPDATE growth_os.media_assets SET provenance_kind=$3,provenance_notes=$4,aspect_ratio='4:5',suitable_platforms=$5,production_provenance=$6 WHERE workspace_id=$1 AND id=$2",[w,asset.id,result.origin,`KLPS brand artwork; ${provider.id}; no genuine footage represented`,JSON.stringify([row.platform]),JSON.stringify(provenance)]);
  candidate={...base('asset',result.origin==='designed'?'designed_visual':'generated_visual'),media_asset_id:asset.id,request,provider:provider.id,alt:prepareCopy(request).alt};s.candidates.push(candidate);s.asset_id=candidate.id;
  }else if(input.action==='attach'){
- const a=(await c.query('SELECT * FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2',[w,id(input.media_asset_id)])).rows[0];
+ let a=(await c.query('SELECT * FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,id(input.media_asset_id)])).rows[0];
+ let externalBrief:any=null;
+ if(input.chatgpt_assisted===true){
+ externalBrief=s.image_briefs?.find((x:any)=>x.id===input.image_brief_id);
+ if(b.requirement.kind!=='designed'||b.requirement.media_type!=='image'||!externalBrief||externalBrief.brief_hash!==hash)throw fail('Use a current image brief for a designed position');
+ if(input.provenance_confirmed!==true)throw fail('Confirm that this image was generated externally using this brief');
+ if(!a||a.approved_for_use||!['unknown','generated'].includes(a.provenance_kind)||a.production_provenance)throw fail('Choose a newly uploaded external image; existing generation provenance cannot be overwritten');
+ const preview=await previewPlanningMedia(w,a.id,c);
+ let metadata;try{metadata=await sharp(preview.body,{limitInputPixels:20_000_000}).metadata();}catch{throw fail('Upload a valid JPEG or PNG image',400);}
+ if(!['jpeg','png'].includes(metadata.format??'')||!metadata.width||!metadata.height||metadata.width*5!==metadata.height*4)throw fail('Export the generated image in 4:5 portrait format (1080 × 1350 recommended) before attaching',400);
+ const notes=text(input.provenance_notes,1000),provenance={origin:'generated',method:'chatgpt_assisted',generated_by:'external_chatgpt',content_id:row.id,campaign_id:p.id,opportunity_id:n.id,insight_id:n.insight_id,image_brief_id:externalBrief.id,image_brief_version:externalBrief.version,brief_hash:hash,request:externalBrief.request,prompt:externalBrief.prompt,founder_notes:notes,uploaded_by:u,recorded_at:now,width:metadata.width,height:metadata.height};
+ a=(await c.query("UPDATE growth_os.media_assets SET provenance_kind='generated',provenance_notes=$3,production_provenance=$4,aspect_ratio='4:5',suitable_platforms=$5,approved_for_use=false,provenance_history=provenance_history || jsonb_build_array($6::jsonb),updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *",[w,a.id,notes,JSON.stringify(provenance),JSON.stringify([row.platform]),JSON.stringify({at:now,actor_id:u,from:a.provenance_kind,to:'generated',method:'chatgpt_assisted',image_brief_id:externalBrief.id})])).rows[0];
+ }
+
  if(!a||!assetFits(b,{...a,approved_for_use:true}))throw fail('Record matching media provenance and format in the existing media library first');
- candidate={...base('asset',['genuine_founder','genuine_product'].includes(a.provenance_kind)?input.edited===true?'edited_genuine_media':'genuine_media':a.provenance_kind==='generated'?'generated_visual':'designed_visual'),media_asset_id:a.id,edit_notes:input.edited===true?text(input.edit_notes,1000):null};s.candidates.push(candidate);s.asset_id=candidate.id;
+ candidate={...base('asset',input.chatgpt_assisted===true?'chatgpt_assisted_visual':['genuine_founder','genuine_product'].includes(a.provenance_kind)?input.edited===true?'edited_genuine_media':'genuine_media':a.provenance_kind==='generated'?'generated_visual':'designed_visual'),media_asset_id:a.id,image_brief_id:externalBrief?.id??null,provider:externalBrief?'ChatGPT (founder-generated externally)':undefined,edit_notes:input.edited===true?text(input.edit_notes,1000):null};s.candidates.push(candidate);s.asset_id=candidate.id;
+ if(externalBrief){externalBrief.status='asset_received';externalBrief.media_asset_ids=[...(externalBrief.media_asset_ids??[]),a.id];if(s.image_brief_id===externalBrief.id)s.generation_status='asset_received';}
  }else if(['edit','select','reject','approve'].includes(input.action)){
  const old=s.candidates.find((x:any)=>x.id===input.candidate_id);if(!old)throw fail('Candidate not found',404);
  if(input.action==='edit'){

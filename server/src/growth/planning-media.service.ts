@@ -15,10 +15,10 @@ export async function uploadPlanningMedia(w:string,bytes:Buffer,name:string,db:P
  const t=sourceMediaType(bytes),id=randomUUID(),key=`growth-source/${w}/${id}.${t.ext}`;
  await uploadToR2(key,bytes,t.mime);try{const row=(await db.query('INSERT INTO growth_os.media_assets(id,workspace_id,filename,display_name,asset_type,mime_type,storage_key) VALUES($1,$2,$3,$3,$4,$5,$6) RETURNING id,display_name,mime_type,approved_for_use',[id,w,String(name||'Founder media').replace(/[\x00-\x1f/\\]/g,'').slice(0,150),t.kind,t.mime,key])).rows[0];return row;}catch(e){await deleteFromR2(key).catch(()=>undefined);throw e;}
 }
-export async function previewPlanningMedia(w:string,id:string){
- const row=(await pool.query('SELECT storage_key,mime_type FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2',[w,id])).rows[0];
+export async function previewPlanningMedia(w:string,id:string,db:Pick<PoolClient,'query'>=pool){
+ const row=(await db.query('SELECT storage_key,mime_type FROM growth_os.media_assets WHERE workspace_id=$1 AND id=$2',[w,id])).rows[0];
  if(row?.storage_key?.startsWith(`growth-source/${w}/`)){const file=await readFromR2(row.storage_key);return {body:file.body,mime:row.mime_type};}
  // Legacy source metadata may keep its actual bytes in an existing publishing version.
- const version=(await pool.query("SELECT object_key,sha256 FROM growth_os.publishing_assets WHERE workspace_id=$1 AND media_asset_id=$2 AND state<>'revoked' ORDER BY created_at DESC LIMIT 1",[w,id])).rows[0];
+ const version=(await db.query("SELECT object_key,sha256 FROM growth_os.publishing_assets WHERE workspace_id=$1 AND media_asset_id=$2 AND state<>'revoked' ORDER BY created_at DESC LIMIT 1",[w,id])).rows[0];
  if(!version)throw Object.assign(new Error('Private preview unavailable'),{statusCode:404});const file=await readFromR2(version.object_key);if(!jpeg(file.body)||digest(file.body)!==version.sha256)throw Object.assign(new Error('Private preview unavailable'),{statusCode:404});return {body:file.body,mime:'image/jpeg'};
 }
