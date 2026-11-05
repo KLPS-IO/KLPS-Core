@@ -34,6 +34,12 @@ router.get('/:id/audio/:questionKey', async (req, res) => {
     const result = await pool.query('SELECT payload FROM research_field_interviews WHERE id=$1', [req.params.id]);
     const audio: StoredAudio | undefined = result.rows[0]?.payload.audio?.find((a: StoredAudio) => a.questionKey === req.params.questionKey);
     if (!audio) { res.sendStatus(404); return; }
+    if (req.query.transcriptId !== undefined) {
+      const transcriptId = String(req.query.transcriptId);
+      if (!uuid.test(transcriptId)) { res.sendStatus(400); return; }
+      const match = await pool.query('SELECT id FROM research_field_transcripts WHERE id=$1 AND interview_id=$2 AND question_key=$3 AND audio_object_key=$4', [transcriptId, req.params.id, req.params.questionKey, audio.objectKey]);
+      if (!match.rows.length) { res.status(409).json({ error: 'The recording no longer matches this transcript. Refresh the interview.' }); return; }
+    }
     const file = await readFromR2(audio.objectKey);
     res.setHeader('Content-Type', audio.contentType); res.setHeader('X-Content-Type-Options', 'nosniff'); res.send(file.body);
   } catch { res.status(503).json({ error: 'Private recording unavailable. Please retry.' }); }
