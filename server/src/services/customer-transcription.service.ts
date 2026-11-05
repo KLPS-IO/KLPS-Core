@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from 'openai';
+import { toBritishEnglish } from './customer-british-english';
 import { pool } from '../storage/postgres.client';
 import { readFromR2 } from './r2.service';
 
@@ -8,7 +9,7 @@ export async function transcribeRecording(bytes: Buffer, contentType: string, ap
   const extension = contentType.includes('mp4') ? 'm4a' : contentType.includes('wav') ? 'wav' : contentType.includes('ogg') ? 'ogg' : 'webm';
   if (extension === 'ogg') throw new Error('Please convert this Ogg recording to WebM or WAV before transcription. The original audio is preserved.');
   const client = new OpenAI({ apiKey, maxRetries: 0, timeout: 120000, ...(transport ? {fetch: transport} : {}) });
-  const result = await client.audio.transcriptions.create({ file: await toFile(bytes, `answer.${extension}`, { type: contentType }), model: TRANSCRIPTION_MODEL });
+  const result = await client.audio.transcriptions.create({ file: await toFile(bytes, `answer.${extension}`, { type: contentType }), model: TRANSCRIPTION_MODEL, prompt: 'A UK English customer-research interview. British spellings include realise, personalised, colour, behaviour, centre and fibre. Preserve the speakers’ wording and incomplete phrases.' });
   if (!result.text?.trim()) throw new Error('No speech transcript was returned. Please check the audio before retrying.');
   return result.text.trim();
 }
@@ -37,7 +38,7 @@ export async function runTranscriptionQueue(): Promise<void> {
         if (!record?.audioConsent || !audio) { await pool.query("UPDATE research_field_transcripts SET status='obsolete',updated_at=now() WHERE id=$1",[job.id]); continue; }
         const file = await readFromR2(job.audio_object_key);
         const text = await transcribeRecording(file.body, audio.contentType, process.env.OPENAI_API_KEY!);
-        await pool.query(`UPDATE research_field_transcripts SET status='draft', original_text=$2, edited_text=$2, completed_at=now(), updated_at=now(), revision=revision+1 WHERE id=$1 AND status='processing'`, [job.id,text]);
+        await pool.query(`UPDATE research_field_transcripts SET status='draft', original_text=$2, edited_text=$3, completed_at=now(), updated_at=now(), revision=revision+1 WHERE id=$1 AND status='processing'`, [job.id,text,toBritishEnglish(text)]);
       } catch (error) {
         await pool.query("UPDATE research_field_transcripts SET status='failed',error_message=$2,updated_at=now(),revision=revision+1 WHERE id=$1 AND status='processing'",[job.id,safeTranscriptionError(error)]);
       }

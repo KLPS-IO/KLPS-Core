@@ -11,7 +11,7 @@ router.use((_req, res, next) => { res.setHeader('Cache-Control', 'private, no-st
 const keys = new Set(['story', 'impact', 'alternative', 'gap', 'outcome', 'concepts', 'offer']);
 const types = new Set(['audio/webm', 'video/webm', 'audio/mp4', 'audio/ogg', 'audio/wav']);
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-type StoredAudio = { questionKey: string; objectKey: string; contentType: string; bytes: number; durationSeconds: number };
+type StoredAudio = { questionKey: string; objectKey: string; contentType: string; bytes: number; durationSeconds: number; captureWarnings?: string[] };
 const fields = ['id','createdAt','version','source','relationship','segment','status','story','impact','alternative','gap','outcome','frequency','spend','spendBasis','problem','offer','price','priceResponse','objection','commitment','contact','paymentReference','paidAmount','notes'];
 const upload = multer({ storage: multer.memoryStorage(), limits: { files: 7, fileSize: 10 * 1024 * 1024, fields: 1, fieldSize: 256 * 1024, parts: 8 }, fileFilter: (_req, file, cb) => cb(null, keys.has(file.fieldname) && types.has(file.mimetype)) }).any();
 function parseAudio(req: Request, res: Response, next: () => void) {
@@ -67,6 +67,7 @@ async function saveInterview(req: Request, res: Response) {
   if (!Array.isArray(metadata) || metadata.length !== files.length || metadata.length > 7 || new Set(files.map(f=>f.fieldname)).size !== files.length) { res.status(400).json({ error: 'Every recorded answer must have one matching audio file.' }); return; }
   for (const file of files) {
     const meta = metadata.find((m: any) => m?.questionKey === file.fieldname);
+    if (meta?.captureWarnings !== undefined && (!Array.isArray(meta.captureWarnings) || meta.captureWarnings.length > 4 || meta.captureWarnings.some((code:unknown)=>typeof code!=='string'||!['microphone_muted','microphone_ended','backgrounded','recorder_error'].includes(code)))) { res.status(400).json({error:'Invalid capture warning metadata.'}); return; }
     const max = file.fieldname === 'concepts' ? 601 : file.fieldname === 'offer' ? 301 : 181;
     const signature = file.buffer.subarray(0,4).toString('hex');
     const valid = signature === '1a45dfa3' || signature === '4f676753' || signature === '52494646' || file.buffer.subarray(4,8).toString() === 'ftyp';
@@ -83,7 +84,7 @@ async function saveInterview(req: Request, res: Response) {
     for (const file of files) {
       const objectKey = `research/private-interviews/${b.id}/${file.fieldname}-${crypto.randomUUID()}`;
       await uploadToR2(objectKey, file.buffer, file.mimetype);
-      uploaded.push({ questionKey: file.fieldname, objectKey, contentType: file.mimetype, bytes: file.size, durationSeconds: metadata.find((m:any)=>m.questionKey===file.fieldname).durationSeconds });
+      uploaded.push({ questionKey: file.fieldname, objectKey, contentType: file.mimetype, bytes: file.size, durationSeconds: metadata.find((m:any)=>m.questionKey===file.fieldname).durationSeconds, captureWarnings: metadata.find((m:any)=>m.questionKey===file.fieldname).captureWarnings || [] });
     }
     payload.audio = [...previous.filter(a=>!uploaded.some(n=>n.questionKey===a.questionKey)), ...uploaded];
     payload.audioConsent = b.audioConsent === true;
