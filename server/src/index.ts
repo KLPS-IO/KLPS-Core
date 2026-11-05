@@ -1,3 +1,4 @@
+import customerTranscriptionRoutes from "./routes/customer-transcription.routes";
 import customerInterviewsRoutes from "./routes/customer-interviews.routes";
 import express from "express";
 import cors from "cors";
@@ -217,6 +218,7 @@ app.use("/api/data-room", dataRoomRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/growth", growthRoutes);
 app.use("/api/rd-lab", rdLabRoutes);
+app.use("/api/research/interviews", customerTranscriptionRoutes);
 app.use("/api/research/interviews", customerInterviewsRoutes);
 app.use("/api/research", researchRoutes);
 
