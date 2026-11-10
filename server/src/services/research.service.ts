@@ -11,6 +11,7 @@ export type VoiceRecordingInput = {
 };
 
 export type ResearchSubmission = {
+  discoverySource?: string;
   bodyType?: string;
     otherBodyType?: string;
   fullName: string;
@@ -149,12 +150,13 @@ export async function submitResearchResponse(
         desired_insights,
         other_insight,
         trusted_source,
-        body_area_responses
+        body_area_responses,
+        discovery_source
               )
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
         $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-        $22,$23,$24,$25
+        $22,$23,$24,$25,$26
       )
       `,
       [
@@ -183,6 +185,7 @@ export async function submitResearchResponse(
         data.otherInsight ?? null,
         JSON.stringify(data.trustedSource ?? []),
         JSON.stringify(bodyAreaResponses),
+        data.discoverySource ?? null,
       ],
     );
 

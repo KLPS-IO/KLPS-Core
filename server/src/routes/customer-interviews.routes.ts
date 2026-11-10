@@ -8,16 +8,16 @@ import { uploadToR2, readFromR2, deleteFromR2 } from '../services/r2.service';
 const router = Router();
 router.use(requireDataRoomAuth, requireAdmin);
 router.use((_req, res, next) => { res.setHeader('Cache-Control', 'private, no-store'); next(); });
-const keys = new Set(['story', 'impact', 'alternative', 'gap', 'outcome', 'concepts', 'offer']);
+const keys = new Set(['story', 'impact', 'alternative', 'gap', 'outcome', 'concepts', 'offer', 'reflection']);
 const types = new Set(['audio/webm', 'video/webm', 'audio/mp4', 'audio/ogg', 'audio/wav']);
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 type StoredAudio = { questionKey: string; objectKey: string; contentType: string; bytes: number; durationSeconds: number; captureWarnings?: string[] };
 const fields = ['id','createdAt','version','source','relationship','segment','status','story','impact','alternative','gap','outcome','frequency','spend','spendBasis','problem','offer','price','priceResponse','objection','commitment','contact','paymentReference','paidAmount','notes'];
-const upload = multer({ storage: multer.memoryStorage(), limits: { files: 7, fileSize: 10 * 1024 * 1024, fields: 1, fieldSize: 256 * 1024, parts: 8 }, fileFilter: (_req, file, cb) => cb(null, keys.has(file.fieldname) && types.has(file.mimetype)) }).any();
+const upload = multer({ storage: multer.memoryStorage(), limits: { files: 8, fileSize: 10 * 1024 * 1024, fields: 1, fieldSize: 256 * 1024, parts: 9 }, fileFilter: (_req, file, cb) => cb(null, keys.has(file.fieldname) && types.has(file.mimetype)) }).any();
 function parseAudio(req: Request, res: Response, next: () => void) {
   if (!req.is('multipart/form-data')) { next(); return; }
   upload(req, res, error => {
-    if (error) { res.status(400).json({ error: 'Invalid audio upload. Maximum 7 recordings, 10 MB each.' }); return; }
+    if (error) { res.status(400).json({ error: 'Invalid audio upload. Maximum 8 recordings, 10 MB each.' }); return; }
     try { req.body = JSON.parse(req.body.payload); next(); } catch { res.status(400).json({ error: 'Invalid interview payload' }); }
   });
 }
@@ -47,7 +47,7 @@ router.get('/:id/audio/:questionKey', async (req, res) => {
 router.route('/').post(parseAudio, saveInterview).put(parseAudio, saveInterview);
 async function saveInterview(req: Request, res: Response) {
   const b = req.body;
-  if (!b || b.adult !== true || b.consent !== true || !uuid.test(b.id) || !['klps-discovery-v1','klps-discovery-v2','klps-discovery-v3'].includes(b.version) || !['completed','partial','pilot'].includes(b.status) || typeof b.source !== 'string' || !b.source.trim()) { res.status(400).json({ error: 'Adult consent, recruitment source and valid interview required.' }); return; }
+  if (!b || b.adult !== true || b.consent !== true || !uuid.test(b.id) || !['klps-discovery-v1','klps-discovery-v2','klps-discovery-v3','klps-discovery-v4'].includes(b.version) || !['completed','partial','pilot'].includes(b.status) || typeof b.source !== 'string' || !b.source.trim()) { res.status(400).json({ error: 'Adult consent, recruitment source and valid interview required.' }); return; }
   const concept = b.concepts;
   if (!concept || typeof concept !== 'object' || Array.isArray(concept) || typeof concept.tested !== 'boolean') { res.status(400).json({ error: 'Invalid concept comparison' }); return; }
   const concepts: Record<string, unknown> = { tested: concept.tested };
@@ -64,7 +64,7 @@ async function saveInterview(req: Request, res: Response) {
   if (b.commitment === 'paid' && (!b.paymentReference || !(Number(b.paidAmount) > 0))) { res.status(400).json({ error: 'Actual payment amount and reference required.' }); return; }
   const files = (req.files || []) as Express.Multer.File[];
   const metadata = b.newAudio || [];
-  if (!Array.isArray(metadata) || metadata.length !== files.length || metadata.length > 7 || new Set(files.map(f=>f.fieldname)).size !== files.length) { res.status(400).json({ error: 'Every recorded answer must have one matching audio file.' }); return; }
+  if (!Array.isArray(metadata) || metadata.length !== files.length || metadata.length > 8 || new Set(files.map(f=>f.fieldname)).size !== files.length) { res.status(400).json({ error: 'Every recorded answer must have one matching audio file.' }); return; }
   for (const file of files) {
     const meta = metadata.find((m: any) => m?.questionKey === file.fieldname);
     if (meta?.captureWarnings !== undefined && (!Array.isArray(meta.captureWarnings) || meta.captureWarnings.length > 4 || meta.captureWarnings.some((code:unknown)=>typeof code!=='string'||!['microphone_muted','microphone_ended','backgrounded','recorder_error'].includes(code)))) { res.status(400).json({error:'Invalid capture warning metadata.'}); return; }
@@ -80,7 +80,7 @@ async function saveInterview(req: Request, res: Response) {
     if (req.method === 'PUT' && !existing) { res.status(404).json({ error: 'Interview no longer exists' }); return; }
     const previous: StoredAudio[] = existing?.audio || [];
     if ((files.length || previous.length) && b.audioConsent !== true) { res.status(400).json({ error: 'Explicit voice recording consent is required.' }); return; }
-    if (b.status === 'completed' && !b.story.trim() && !files.length && !previous.length) { res.status(400).json({ error: 'A spoken answer or research notes are required.' }); return; }
+    if (b.status === 'completed' && !b.story.trim() && !files.some(f=>f.fieldname!=='reflection') && !previous.some(a=>a.questionKey!=='reflection')) { res.status(400).json({ error: 'A spoken answer or research notes are required.' }); return; }
     for (const file of files) {
       const objectKey = `research/private-interviews/${b.id}/${file.fieldname}-${crypto.randomUUID()}`;
       await uploadToR2(objectKey, file.buffer, file.mimetype);

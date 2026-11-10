@@ -246,6 +246,7 @@ router.post("/", handleVoiceUpload, async (req, res) => {
 
     const submission = await submitResearchResponse(
       {
+        discoverySource: typeof payload.discoverySource === 'string' && /^[a-z0-9-]{1,48}$/.test(payload.discoverySource) ? payload.discoverySource : undefined,
         bodyType: asString(payload.bodyType) || undefined,
         otherBodyType: asString(payload.otherBodyType) || undefined,
         fullName: asString(payload.fullName),
