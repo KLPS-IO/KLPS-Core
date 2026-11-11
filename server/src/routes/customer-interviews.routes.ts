@@ -47,7 +47,7 @@ router.get('/:id/audio/:questionKey', async (req, res) => {
 router.route('/').post(parseAudio, saveInterview).put(parseAudio, saveInterview);
 async function saveInterview(req: Request, res: Response) {
   const b = req.body;
-  if (!b || b.adult !== true || b.consent !== true || !uuid.test(b.id) || !['klps-discovery-v1','klps-discovery-v2','klps-discovery-v3','klps-discovery-v4'].includes(b.version) || !['completed','partial','pilot'].includes(b.status) || typeof b.source !== 'string' || !b.source.trim()) { res.status(400).json({ error: 'Adult consent, recruitment source and valid interview required.' }); return; }
+  if (!b || b.adult !== true || b.consent !== true || !uuid.test(b.id) || !['klps-discovery-v1','klps-discovery-v2','klps-discovery-v3','klps-discovery-v4','klps-discovery-v5'].includes(b.version) || !['completed','partial','pilot'].includes(b.status) || typeof b.source !== 'string' || !b.source.trim()) { res.status(400).json({ error: 'Adult consent, recruitment source and valid interview required.' }); return; }
   const concept = b.concepts;
   if (!concept || typeof concept !== 'object' || Array.isArray(concept) || typeof concept.tested !== 'boolean') { res.status(400).json({ error: 'Invalid concept comparison' }); return; }
   const concepts: Record<string, unknown> = { tested: concept.tested };
