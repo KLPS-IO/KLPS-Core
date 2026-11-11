@@ -92,7 +92,14 @@ async function saveInterview(req: Request, res: Response) {
     if (req.method === 'POST' && existing && !append) { await client.query('ROLLBACK'); res.json({ saved: true, id: b.id }); return; }
     if (req.method === 'PUT' && !existing) { await client.query('ROLLBACK'); res.status(404).json({ error: 'Interview no longer exists' }); return; }
     const previous: StoredAudio[] = existing?.audio || [];
-    if (append && previous.some(a=>a.questionKey===files[0].fieldname)) { await client.query('ROLLBACK'); res.json({saved:true,id:b.id,interview:publicPayload(existing)}); return; }
+    const duplicate = append ? previous.find(a=>a.questionKey===files[0].fieldname) : undefined;
+    if (duplicate) {
+      await client.query('ROLLBACK');
+      if (duplicate.bytes !== files[0].size || duplicate.durationSeconds !== metadata[0].durationSeconds) {
+        res.status(409).json({error:'This clip ID already belongs to a different recording. Download the pending backup and upload it as a new clip.'}); return;
+      }
+      res.json({saved:true,id:b.id,interview:publicPayload(existing)}); return;
+    }
     if (append && existing) Object.assign(payload, existing);
     if (append && !existing) payload.status = 'partial';
     if ((files.length || previous.length) && b.audioConsent !== true) { await client.query('ROLLBACK'); res.status(400).json({ error: 'Explicit voice recording consent is required.' }); return; }
