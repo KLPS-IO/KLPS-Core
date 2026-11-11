@@ -6,7 +6,7 @@ import { readFromR2 } from './r2.service';
 export const TRANSCRIPTION_MODEL = 'gpt-transcribe';
 export type TranscriptJob = { id: string; interview_id: string; question_key: string; audio_object_key: string; model: string };
 export async function transcribeRecording(bytes: Buffer, contentType: string, apiKey: string, transport?: typeof fetch): Promise<string> {
-  const extension = contentType.includes('mp4') ? 'm4a' : contentType.includes('wav') ? 'wav' : contentType.includes('ogg') ? 'ogg' : 'webm';
+  const extension = (contentType.includes('mp4') || contentType.includes('m4a')) ? 'm4a' : contentType.includes('mpeg') ? 'mp3' : contentType.includes('wav') ? 'wav' : contentType.includes('ogg') ? 'ogg' : 'webm';
   if (extension === 'ogg') throw new Error('Please convert this Ogg recording to WebM or WAV before transcription. The original audio is preserved.');
   const client = new OpenAI({ apiKey, maxRetries: 0, timeout: 120000, ...(transport ? {fetch: transport} : {}) });
   const result = await client.audio.transcriptions.create({ file: await toFile(bytes, `answer.${extension}`, { type: contentType }), model: TRANSCRIPTION_MODEL, prompt: 'A UK English customer-research interview. British spellings include realise, personalised, colour, behaviour, centre and fibre. Preserve the speakers’ wording and incomplete phrases.' });

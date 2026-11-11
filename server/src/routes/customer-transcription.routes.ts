@@ -9,8 +9,8 @@ router.use((_req,res,next)=>{res.setHeader('Cache-Control','private, no-store');
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const publicJob=(row:Record<string,unknown>)=>{
  const text=String(row.edited_text||row.original_text||'');const spans=Array.isArray(row.speaker_spans)&&validSpeakerSpans(text,row.speaker_spans)?row.speaker_spans as SpeakerSpan[]:[];
- const eligible=row.question_key!=='reflection'&&row.status==='approved'&&row.speakers_reviewed===true&&speakersComplete(text,spans);
- return {...Object.fromEntries(Object.entries(row).filter(([key])=>key!=='audio_object_key')),evidence_kind:row.question_key==='reflection'?'founder_reflection':'interview',speaker_spans:spans,speaker_offset_encoding:'utf16',participant_text:eligible?participantText(text,spans):null,participant_passages:eligible?spans.filter(s=>s.role==='participant').map(s=>({start:s.start,end:s.end,text:text.slice(s.start,s.end)})):[],participant_analysis_ready:eligible};
+ const eligible=String(row.question_key).split('__')[0]!=='reflection'&&row.status==='approved'&&row.speakers_reviewed===true&&speakersComplete(text,spans);
+ return {...Object.fromEntries(Object.entries(row).filter(([key])=>key!=='audio_object_key')),evidence_kind:String(row.question_key).split('__')[0]==='reflection'?'founder_reflection':'interview',speaker_spans:spans,speaker_offset_encoding:'utf16',participant_text:eligible?participantText(text,spans):null,participant_passages:eligible?spans.filter(s=>s.role==='participant').map(s=>({start:s.start,end:s.end,text:text.slice(s.start,s.end)})):[],participant_analysis_ready:eligible};
 };
 router.get('/:id/transcripts',async(req,res)=>{
  if(!uuid.test(String(req.params.id))){res.sendStatus(400);return;}
